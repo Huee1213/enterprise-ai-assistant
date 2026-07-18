@@ -29,7 +29,10 @@ Thumbs.db
 docker-data/
 
 # Runtime data (generated)
-backend/app/test_*.py
 searxng/settings.yml
 /data/
 *.log
+
+# Test / debug scripts
+backend/check_*.py
+backend/test_*.py
