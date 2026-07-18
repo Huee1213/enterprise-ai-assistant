@@ -44,6 +44,13 @@ class UploadResponse(BaseModel):
     message: str
 
 
+class BulkUploadResponse(BaseModel):
+    total: int
+    success: int
+    failed: int
+    results: List[UploadResponse]
+
+
 class AgentStep(BaseModel):
     step: int
     action: str

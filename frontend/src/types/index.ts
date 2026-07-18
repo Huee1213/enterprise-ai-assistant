@@ -6,6 +6,7 @@ export interface Message {
   sources?: Source[]
   steps?: AgentStep[]
   reasoning?: string
+  backendId?: number
 }
 
 export interface Source {

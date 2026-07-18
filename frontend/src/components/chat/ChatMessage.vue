@@ -8,11 +8,15 @@ const props = defineProps<{
   isStreaming?: boolean
   msgIndex?: number
   isAdmin?: boolean
+  selectMode?: boolean
+  selected?: boolean
 }>()
 
 const emit = defineEmits<{
   edit: [msgId: string, newContent: string]
   retry: [msgId: string]
+  deleteMsg: [msgId: string]
+  toggleSelect: [msgId: string]
 }>()
 
 const expandedSteps = ref<Set<string>>(new Set())
@@ -54,6 +58,10 @@ function startEdit() {
 function cancelEdit() {
   editing.value = false
   editText.value = ''
+}
+
+function handleRetry() {
+  emit('retry', props.message.id)
 }
 
 function submitEdit() {
@@ -107,12 +115,19 @@ const agentStatusText = computed(() => {
 
 <template>
   <div
-    class="flex gap-3 group"
+    class="flex gap-3 group items-start"
     :class="[isUser ? 'flex-row-reverse' : 'flex-row', isUser ? 'animate-slide-in-right' : 'animate-fade-in-up']"
     :style="msgIndex != null ? { animationDelay: `${Math.min(msgIndex * 0.05, 0.3)}s` } : {}"
+    @click="selectMode && emit('toggleSelect', message.id)"
+    :role="selectMode ? 'button' : undefined"
   >
-    <div
-      class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold mt-1"
+    <!-- Select checkbox mode -->
+    <div v-if="selectMode" class="shrink-0 mt-2.5">
+      <div class="w-4.5 h-4.5 rounded border flex items-center justify-center transition-colors cursor-pointer" :class="selected ? 'bg-primary border-primary' : 'border-border hover:border-muted-foreground'" style="width:18px;height:18px">
+        <svg v-if="selected" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-primary-foreground"><polyline points="20 6 9 17 4 12"/></svg>
+      </div>
+    </div>
+    <div v-else class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold mt-1"
       :class="isUser ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'"
     >
       {{ isUser ? '我' : 'AI' }}
@@ -127,7 +142,7 @@ const agentStatusText = computed(() => {
       >
         <!-- Edit button for user messages -->
         <button
-          v-if="isUser && !isStreaming && !editing"
+          v-if="isUser && !isStreaming && !editing && !selectMode"
           @click="startEdit"
           class="absolute -top-2 -right-2 opacity-0 group-hover:opacity-100 transition-opacity rounded-full bg-background border border-border p-1 shadow-sm hover:bg-muted"
           title="编辑问题"
@@ -267,9 +282,9 @@ const agentStatusText = computed(() => {
         {{ new Date(message.timestamp).toLocaleTimeString() }}
       </p>
 
-      <!-- Action buttons for AI messages (below time) -->
-      <div v-if="!isUser && !isStreaming && message.content" class="flex items-center gap-1 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button @click="emit('retry', message.id)" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" title="重新生成">
+        <!-- Action buttons (below time) -->
+      <div v-if="!isStreaming && message.content && !selectMode" class="flex items-center gap-1 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button v-if="!isUser" @click="handleRetry" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" title="重新生成">
           <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           重新生成
         </button>
@@ -277,6 +292,10 @@ const agentStatusText = computed(() => {
           <svg v-if="!copied" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
           <svg v-else xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-green-500"><polyline points="20 6 9 17 4 12"/></svg>
           {{ copied ? '已复制' : '复制' }}
+        </button>
+        <button @click="emit('deleteMsg', message.id)" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="删除">
+          <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          删除
         </button>
       </div>
     </div>

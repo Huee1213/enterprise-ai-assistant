@@ -1,20 +1,20 @@
 # 企业 AI 知识助手
 
-> **生产级全栈企业知识库智能问答 Agent，基于 LangChain + LangGraph + Milvus + Vue 3，支持用户认证、角色权限与长短期记忆。**
+> **生产级全栈企业知识库智能问答 Agent，基于 LangChain + LangGraph + Milvus + PostgreSQL + Vue 3，支持用户认证、角色权限与长短期记忆。**
 
 ---
 
 ## 🎯 功能特性
 
-- **🔐 用户认证与角色权限** — JWT 登录/注册，**管理员**(Admin) 管理知识库，**员工**(Employee) 使用问答
-- **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV，自动分块向量化，Milvus 语义检索
-- **🤖 LangGraph Agent 工作流** — 状态机编排，多工具推理（知识检索、网页搜索、摘要生成、当前时间）
+- **🔐 用户认证与角色权限** — JWT 双角色（管理员/员工），管理员管理知识库与用户，员工使用问答
+- **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV，单文件 500MB 上限，支持多文件批量上传
+- **🤖 LangGraph Agent 工作流** — 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
 - **🔍 本地搜索引擎 (SearXNG)** — 自托管元搜索引擎，聚合 Google/Bing/Brave/Startpage 等，无需 API Key
-- **🧠 长短期记忆系统** — 用户偏好、长期事实、历史对话摘要，跨会话持久化
-- **⚡ 实时流式输出** — SSE 逐 Token 流式传输 + Markdown 渲染
-- **🔎 Agent 调试面板** — 实时查看每步推理（LLM 调用、工具执行、输入输出）
-- **✏️ 编辑问题重新提问** — 修改已发送消息后自动重发
-- **⏹️ 停止响应** — 流式输出时可随时中止
+- **🧠 长短期记忆系统** — PostgreSQL 持久化，偏好/事实/对话历史/自动摘要
+- **⚡ 实时流式输出** — SSE 逐 Token 流式传输 + Markdown 渲染 + 推理步骤实时可见
+- **📋 对话管理** — 单条消息删除+二次确认、重新生成、复制、编辑问题
+- **📖 文档预览** — 原始内容(含 PDF 内联/DOCX 样式/CSV 表格) + 文本块详情
+- **🔎 Agent 调试面板** — 管理员可实时查看每步推理（LLM 调用、工具执行、输入输出）
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
 
@@ -27,13 +27,16 @@
 | **后端** | Python 3.11+, FastAPI, Uvicorn |
 | **LLM 框架** | LangChain, LangGraph（状态机） |
 | **向量数据库** | Milvus 2.5（langchain-milvus） |
-| **LLM 供应商** | LiteLLM（OpenAI / DeepSeek / Anthropic 等） |
+| **结构化数据库** | PostgreSQL 16 + pgvector |
+| **缓存** | Redis (valkey) |
+| **LLM 提供商** | LiteLLM（OpenAI / DeepSeek / Anthropic / OpenRouter 等） |
 | **搜索引擎** | SearXNG（自托管元搜索引擎） |
 | **前端** | Vue 3 + TypeScript + Vite |
 | **样式** | Tailwind CSS, CSS 变量（shadcn/ui 风格） |
 | **状态管理** | Pinia |
 | **认证** | JWT（pyjwt）+ SHA256 |
 | **API 客户端** | Axios, Server-Sent Events |
+| **DOCX 预览** | mammoth.js（浏览器端 DOCX → HTML 转换） |
 | **部署** | Docker, docker-compose, Nginx |
 
 ---
@@ -44,52 +47,59 @@
 enterprise-ai-assistant/
 ├── backend/                      # Python FastAPI 后端
 │   ├── app/
-│   │   ├── main.py              # FastAPI 入口 + 路由注册
+│   │   ├── main.py              # FastAPI 入口 + 生命周期
 │   │   ├── config.py            # 环境变量配置
 │   │   ├── models.py            # Pydantic 数据模型
+│   │   ├── database.py          # SQLAlchemy 2.0 async + PostgreSQL
 │   │   ├── auth.py              # JWT 认证、用户管理
-│   │   ├── memory.py            # 长短期记忆系统
+│   │   ├── memory.py            # 长短期记忆系统（SQLAlchemy ORM）
 │   │   ├── embeddings.py        # 向量化（FastEmbed 本地）
 │   │   ├── vector_store.py      # Milvus 向量存储
 │   │   ├── document_processor.py # 文件解析与分块
-│   │   ├── document_registry.py # 文档元数据管理
+│   │   ├── document_registry.py # 文档元数据 + 文本块存储
 │   │   ├── tools.py             # LangChain 工具（知识/网页/时间/摘要）
 │   │   ├── agent_graph.py       # LangGraph 状态机 + Agent
 │   │   └── routes/
 │   │       ├── auth.py          # 登录/注册/用户管理
-│   │       ├── chat.py          # 流式/简单聊天
-│   │       ├── documents.py     # 文档上传管理（仅 admin）
+│   │       ├── chat.py          # 流式/简单聊天 + 对话历史
+│   │       ├── documents.py     # 文档上传/详情/预览（仅 admin）
 │   │       └── health.py        # 健康检查
 │   ├── Dockerfile
 │   └── requirements.txt
 ├── frontend/                     # Vue 3 + TypeScript 前端
 │   ├── src/
 │   │   ├── main.ts              # 应用入口
-│   │   ├── App.vue              # 根组件
+│   │   ├── App.vue              # 根组件 + 退出登录遮罩
 │   │   ├── router/index.ts      # 路由 + 守卫
-│   │   ├── stores/              # Pinia（chat, auth, theme）
-│   │   ├── api/                 # API 客户端 + 认证拦截器
+│   │   ├── stores/              # Pinia（chat, auth, theme, health）
+│   │   ├── api/                 # API 客户端 + SSE 流式
 │   │   ├── types/               # TypeScript 类型定义
 │   │   ├── components/
 │   │   │   ├── chat/            # ChatMessage, ChatInput, ChatContainer
 │   │   │   ├── documents/       # DocumentUpload, DocumentList
 │   │   │   ├── layout/          # Sidebar, ThemeToggle
-│   │   │   └── agent/           # AgentPanel（实时推理预览）
+│   │   │   ├── agent/           # AgentPanel（实时推理预览）
+│   │   │   └── common/          # ConfirmDialog（通用确认弹窗）
 │   │   └── views/
-│   │       ├── ChatView.vue     # 员工工作台
-│   │       ├── LoginView.vue    # 登录/注册
+│   │       ├── ChatView.vue     # 员工/管理员聊天工作台
+│   │       ├── LoginView.vue    # 登录
 │   │       ├── AdminLayout.vue  # 管理后台布局
-│   │       ├── AdminDashboard.vue # 总览
+│   │       ├── AdminDashboard.vue # 系统总览
 │   │       ├── AdminUsers.vue   # 用户管理
-│   │       ├── DocumentsView.vue # 文档管理
-│   │       └── AgentDebugView.vue # 调试面板
+│   │       └── DocumentsView.vue # 文档管理（上传/详情/预览）
 │   ├── Dockerfile
 │   └── package.json
 ├── searxng/                      # SearXNG 配置
 │   └── settings.yml
-├── docker-compose.yml            # 6 服务编排
+├── documents/                    # 示例企业文档
+│   ├── product_overview.md      # 产品概述
+│   ├── technical_spec.md        # 技术规格书
+│   ├── employee_handbook.txt    # 员工手册
+│   ├── meeting_notes.txt        # 会议纪要
+│   ├── sales_data.csv           # 销售数据
+│   └── project_guide.md         # 知识库搭建指南
+├── docker-compose.yml            # 8 服务编排
 ├── .env.example
-├── documents/sample.md
 └── README.md
 ```
 
@@ -128,23 +138,23 @@ docker-compose up -d --build
 
 | 服务 | 端口 | 描述 |
 |---------|------|-------------|
-| **前端** | `80` | Vue SPA，Nginx 托管 |
-| **后端 API** | `8000` | FastAPI + LangGraph Agent |
+| **PostgreSQL** | `5432` | 结构化数据库 |
+| **Redis** | `6379` | 缓存 |
 | **Milvus** | `19530` | 向量数据库 |
 | **SearXNG** | `8080` | 元搜索引擎 |
-| **Redis** | `6379` | 搜索缓存 |
+| **后端 API** | `8000` | FastAPI + LangGraph Agent |
+| **前端** | `80` | Vue SPA，Nginx 托管 |
 
 ### 第三步：验证部署
 
 ```bash
-# 检查容器状态
+# 检查所有容器状态
 docker-compose ps
 
 # 后端健康检查
 curl http://localhost:8000/health
 
-# 默认管理员账号
-# 用户名: admin  密码: admin123
+# 默认管理员账号: admin / admin123
 ```
 
 #### 预期响应：
@@ -162,17 +172,18 @@ curl http://localhost:8000/health
 
 | 用户名 | 密码 | 角色 | 说明 |
 |--------|------|------|------|
-| `admin` | `admin123` | 管理员 | 文档管理、用户管理 |
-| *(注册)* | — | 员工 | 对话问答 |
+| `admin` | `admin123` | 管理员 | 文档管理、用户管理、系统监控 |
 
 **管理员** 登录后：
-1. 点击右上角 **管理后台**
-2. 进入 **文档管理** 上传企业文档
+1. 点击右上角 **后台** → **文档管理**
+2. 拖拽或选择文件上传（支持批量、单文件最大 500MB）
 3. 返回对话页面测试问答
 
 ### 第五步：测试聊天
 
 ```bash
+# 生成环境中的示例文档已放置在 documents/ 目录
+# 需通过后台手动上传后才能被检索到
 curl -X POST http://localhost:8000/api/chat/simple \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <你的token>" \
@@ -186,18 +197,26 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | 方法 | 路径 | 认证 | 角色 | 描述 |
 |--------|------|------|------|-------------|
 | `POST` | `/api/auth/login` | — | — | 用户登录 |
-| `POST` | `/api/auth/register` | — | — | 用户注册 |
+| `POST` | `/api/auth/register` | JWT | admin | 注册员工 |
 | `GET` | `/api/auth/me` | JWT | — | 当前用户信息 |
 | `GET` | `/api/auth/users` | JWT | admin | 用户列表 |
 | `DELETE` | `/api/auth/users/{id}` | JWT | admin | 删除用户 |
 | `GET` | `/api/auth/preferences` | JWT | — | 获取偏好 |
 | `PUT` | `/api/auth/preferences` | JWT | — | 更新偏好 |
-| `GET` | `/api/auth/memory-context` | JWT | — | 获取记忆上下文 |
 | `POST` | `/api/chat/stream` | JWT | — | 流式聊天（SSE） |
 | `POST` | `/api/chat/simple` | JWT | — | 非流式聊天 |
-| `POST` | `/api/chat/title` | — | — | 对话标题生成 |
-| `POST` | `/api/documents/upload` | JWT | admin | 上传文档 |
+| `POST` | `/api/chat/title` | JWT | — | 对话标题生成 |
+| `GET` | `/api/chat/conversations` | JWT | — | 对话列表 |
+| `GET` | `/api/chat/conversations/{id}` | JWT | — | 对话消息历史 |
+| `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
+| `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |
+| `POST` | `/api/chat/conversations/{id}/messages/bulk-delete` | JWT | — | 批量删除消息 |
+| `PUT` | `/api/chat/conversations/{id}/title` | JWT | — | 更新对话标题 |
+| `POST` | `/api/documents/upload` | JWT | admin | 上传单文件 |
+| `POST` | `/api/documents/upload-bulk` | JWT | admin | 批量上传 |
 | `GET` | `/api/documents/list` | JWT | admin | 文档列表 |
+| `GET` | `/api/documents/{id}` | JWT | admin | 文档详情+文本块 |
+| `GET` | `/api/documents/{id}/file` | JWT | admin | 下载原文件 |
 | `DELETE` | `/api/documents/{id}` | JWT | admin | 删除文档 |
 | `GET` | `/health` | — | — | 健康检查 |
 
@@ -217,40 +236,42 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `MILVUS_URI` | `http://milvus:19530` | Milvus 连接地址 |
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG 搜索地址 |
+| `DB_URL` | `postgresql+asyncpg://app:app123@postgres:5432/enterprise_ai` | 数据库连接 |
 | `CHUNK_SIZE` | `1000` | 文档分块大小 |
 | `CHUNK_OVERLAP` | `200` | 分块重叠长度 |
 | `TOP_K` | `5` | 检索返回块数 |
 
 ---
 
-## 🏗️ 架构架构
+## 🏗️ 系统架构
 
 ```
-┌──────────────┐     ┌──────────────┐     ┌──────────────────┐
-│   浏览器     │────▶│    Nginx     │────▶│    FastAPI       │
-│  (Vue 3)     │◀────│  (端口 80)    │◀────│  (端口 8000)     │
-│  · 员工工作台 │     └──────────────┘     │  · JWT 认证       │
-│  · 管理后台   │                           │  · LangGraph Agent│
-│  · 登录/注册  │                           │  · 长短期记忆      │
-└──────────────┘                           └────────┬─────────┘
-                                                    │
-                    ┌───────────────────────────────┼───────────────────┐
-                    │                               │                   │
-              ┌─────▼──────┐                ┌───────▼────────┐  ┌──────▼───────┐
-              │   Milvus   │                │   SearXNG      │  │    LLM API  │
-              │  (向量库)   │                │  (元搜索引擎)    │  │  (OpenAI)   │
-              └────────────┘                └───────┬────────┘  └──────────────┘
-                                                    │
-                                         ┌──────────┴──────────┐
-                                         │  Google / Bing /     │
-                                         │  Brave / Startpage   │
-                                         └─────────────────────┘
+┌──────────────┐     ┌──────────────┐     ┌─────────────────────────┐
+│   浏览器     │────▶│    Nginx     │────▶│    FastAPI              │
+│  (Vue 3)     │◀────│  (端口 80)    │◀────│  (端口 8000)            │
+│  · 员工工作台 │     └──────────────┘     │  · JWT 认证              │
+│  · 管理后台   │                           │  · LangGraph Agent       │
+│  · 登录      │                           │  · 长短期记忆             │
+└──────────────┘                           │  · 文档管理               │
+                                           └──────────┬──────────────┘
+                                                      │
+             ┌────────────────────────────────────────┼───────────────────────┐
+             │                    │                    │                       │
+       ┌─────▼──────┐     ┌──────▼───────┐     ┌──────▼──────┐     ┌───────▼────────┐
+       │ PostgreSQL │     │   Milvus    │     │   SearXNG   │     │    LLM API     │
+       │ (pgvector)  │     │  (向量库)    │     │ (元搜索引擎)  │     │   (OpenAI)     │
+       │ 用户/记忆   │     │              │     │              │     │                │
+       │ 对话/会话   │     └──────────────┘     └──────┬───────┘     └────────────────┘
+       └────────────┘                                  │
+                                              ┌────────┴────────┐
+                                              │ Google/Bing/ ... │
+                                              └─────────────────┘
 ```
 
 ### Agent 工作流（LangGraph）
 
 ```
-用户提问 → [LLM 推理] ──调用工具──→ [知识检索/网页搜索/时间/摘要]
+用户提问 → [LLM 推理] ──调用工具──→ [知识检索/网页搜索/时间查询/摘要]
                │                              │
                │  ← 工具结果 ────────────────┘
                │
@@ -265,9 +286,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | 路由 | 员工 | 管理员 |
 |------|------|--------|
 | `/` 聊天工作台 | ✅ | ✅ |
-| `/documents` 文档 | — | ✅ |
-| `/agent-debug` 调试 | ✅ | ✅ |
-| `/admin` 后台 | — | ✅ |
+| `/admin` 后台总览 | — | ✅ |
 | `/admin/documents` 文档管理 | — | ✅ |
 | `/admin/users` 用户管理 | — | ✅ |
 
@@ -277,12 +296,12 @@ curl -X POST http://localhost:8000/api/chat/simple \
 
 | 类型 | 存储位置 | 说明 |
 |------|---------|------|
-| **短期记忆** | 当前对话上下文 | LLM 上下文窗口内 |
-| **长期偏好** | `data/memory/{user_id}.json` | 用户个人设置 |
-| **长期事实** | JSON 文件（最多 50 条） | 跨会话的用户关键信息 |
-| **对话摘要** | JSON 文件（最多 20 条） | 历史对话总结 |
+| **短期记忆** | PostgreSQL `conversation_history` 表 | 当前对话窗口 + 自动摘要（每 6 条） |
+| **长期事实** | PostgreSQL `memory_facts` 表 | 用户关键信息，含关键词自动提取 |
+| **对话摘要** | PostgreSQL `conversation_summaries` 表 | 历史对话定期压缩摘要 |
+| **用户偏好** | PostgreSQL `users.preferences` 字段 | JSON 格式个人设置 |
 
-Agent 每次被调用时自动注入用户记忆上下文到 system prompt。
+Agent 每次调用时自动注入用户记忆上下文到 system prompt。
 
 ---
 

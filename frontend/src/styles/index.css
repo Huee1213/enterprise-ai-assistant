@@ -78,6 +78,17 @@
 .markdown-content th { @apply border border-border bg-muted px-3 py-2 text-left font-semibold; }
 .markdown-content td { @apply border border-border px-3 py-2; }
 
+/* DOCX preview from mammoth */
+.docx-preview h1 { @apply text-xl font-bold mt-5 mb-3; }
+.docx-preview h2 { @apply text-lg font-bold mt-4 mb-2; }
+.docx-preview h3 { @apply text-base font-semibold mt-3 mb-1; }
+.docx-preview p { @apply mb-2 leading-relaxed; }
+.docx-preview ul, .docx-preview ol { @apply pl-6 mb-3 space-y-1; }
+.docx-preview li { @apply leading-relaxed; }
+.docx-preview table { @apply w-full border-collapse mb-4; }
+.docx-preview td, .docx-preview th { @apply border border-border px-2 py-1 text-xs; }
+.docx-preview img { @apply max-w-full rounded-lg my-2; }
+
 ::-webkit-scrollbar { @apply w-2; }
 ::-webkit-scrollbar-track { @apply bg-transparent; }
 ::-webkit-scrollbar-thumb { @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/30; }

@@ -6,7 +6,19 @@ export async function uploadDocument(file: File): Promise<UploadResponse> {
   formData.append('file', file)
   const { data } = await apiClient.post<UploadResponse>('/documents/upload', formData, {
     headers: { 'Content-Type': 'multipart/form-data' },
-    timeout: 60000,
+    timeout: 120000,
+  })
+  return data
+}
+
+export async function uploadDocumentsBulk(files: File[]): Promise<{ total: number; success: number; failed: number; results: UploadResponse[] }> {
+  const formData = new FormData()
+  for (const f of files) {
+    formData.append('files', f)
+  }
+  const { data } = await apiClient.post('/documents/upload-bulk', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000,
   })
   return data
 }

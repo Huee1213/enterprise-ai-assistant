@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Message, Conversation, SSEEvent, AgentStep } from '@/types'
-import { createChatStream, generateTitle, fetchConversations, fetchConversationMessages, deleteConversation as apiDeleteConv, saveConversationTitle, clearConversationMessages } from '@/api/chat'
+import { createChatStream, generateTitle, fetchConversations, fetchConversationMessages, deleteConversation as apiDeleteConv, saveConversationTitle, clearConversationMessages, deleteMessage as apiDeleteMsg, bulkDeleteMessages as apiBulkDeleteMsgs } from '@/api/chat'
 
 let msgCounter = 0
 function generateId(): string {
@@ -80,6 +80,7 @@ export const useChatStore = defineStore('chat', () => {
           const msg: Message = {
             id: generateId(), role: m.role as 'user' | 'assistant',
             content: m.content, timestamp: new Date(m.timestamp),
+            backendId: m.id,
           }
           if (m.metadata && m.metadata !== '{}') {
             try {
@@ -116,6 +117,20 @@ export const useChatStore = defineStore('chat', () => {
     }
     conv.messages = [...conv.messages, { ...msg, id: generateId(), timestamp: new Date() }]
     conv.updatedAt = new Date()
+  }
+
+  async function deleteMessages(msgIds: string[]) {
+    const conv = activeConversation.value
+    if (!conv || msgIds.length === 0) return
+    const backendIds: number[] = []
+    for (const mId of msgIds) {
+      const msg = conv.messages.find(m => m.id === mId)
+      if (msg && msg.backendId) backendIds.push(msg.backendId)
+    }
+    if (backendIds.length > 0) {
+      try { await apiBulkDeleteMsgs(conv.id, backendIds) } catch { /* ignore */ }
+    }
+    conv.messages = conv.messages.filter(m => !msgIds.includes(m.id))
   }
 
   function updateLastAssistantMessage(updates: Partial<Message>) {
@@ -213,6 +228,6 @@ export const useChatStore = defineStore('chat', () => {
     conversations, activeConversationId, activeConversation, messages,
     isStreaming, useAgentMode, loadingHistory,
     createConversation, selectConversation, deleteConversation,
-    loadConversations, resetConversations, addMessage, sendMessage, stopStreaming, resendEdit, toggleAgentMode,
+    loadConversations, resetConversations, addMessage, sendMessage, stopStreaming, resendEdit, toggleAgentMode, deleteMessages,
   }
 })

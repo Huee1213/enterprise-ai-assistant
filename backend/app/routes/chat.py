@@ -9,7 +9,7 @@ from app.models import ChatRequest, ChatResponse
 from app.config import settings
 from app.auth import get_current_user
 from app.database import get_db
-from app.memory import build_memory_context, save_message, list_conversations, get_conversation_history, delete_conversation, update_conversation_title, ConversationHistory
+from app.memory import build_memory_context, save_message, list_conversations, get_conversation_history, delete_conversation, update_conversation_title, bulk_delete_conversations, ConversationHistory
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -207,6 +207,20 @@ async def delete_conversation_route(
     return {"status": "deleted", "conversation_id": conv_id}
 
 
+class BulkDeleteRequest(BaseModel):
+    conversation_ids: list[str]
+
+
+@router.post("/conversations/bulk-delete")
+async def bulk_delete_conversations_route(
+    req: BulkDeleteRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    await bulk_delete_conversations(db, current_user["user_id"], req.conversation_ids)
+    return {"status": "deleted", "count": len(req.conversation_ids)}
+
+
 class TitleUpdate(BaseModel):
     title: str
 
@@ -224,6 +238,44 @@ async def clear_conversation_messages(
     ))
     await db.commit()
     return {"status": "cleared", "conversation_id": conv_id}
+
+
+@router.delete("/conversations/{conv_id}/messages/{msg_db_id}")
+async def delete_single_message(
+    conv_id: str,
+    msg_db_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import delete as sql_delete
+    await db.execute(sql_delete(ConversationHistory).where(
+        ConversationHistory.id == msg_db_id,
+        ConversationHistory.user_id == current_user["user_id"],
+        ConversationHistory.conversation_id == conv_id,
+    ))
+    await db.commit()
+    return {"status": "deleted", "message_id": msg_db_id}
+
+
+class BulkMsgDeleteRequest(BaseModel):
+    message_ids: list[int]
+
+
+@router.post("/conversations/{conv_id}/messages/bulk-delete")
+async def bulk_delete_messages(
+    conv_id: str,
+    req: BulkMsgDeleteRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    from sqlalchemy import delete as sql_delete
+    await db.execute(sql_delete(ConversationHistory).where(
+        ConversationHistory.id.in_(req.message_ids),
+        ConversationHistory.user_id == current_user["user_id"],
+        ConversationHistory.conversation_id == conv_id,
+    ))
+    await db.commit()
+    return {"status": "deleted", "count": len(req.message_ids)}
 
 
 @router.put("/conversations/{conv_id}/title")

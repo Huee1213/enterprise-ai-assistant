@@ -81,7 +81,7 @@ export async function fetchConversations(): Promise<{ conversation_id: string; t
   return data.conversations || []
 }
 
-export async function fetchConversationMessages(convId: string): Promise<{ role: string; content: string; metadata?: string; timestamp: string }[]> {
+export async function fetchConversationMessages(convId: string): Promise<{ id: number; role: string; content: string; metadata?: string; timestamp: string }[]> {
   const { data } = await apiClient.get(`/chat/conversations/${convId}`)
   return data.messages || []
 }
@@ -96,5 +96,17 @@ export async function saveConversationTitle(convId: string, title: string): Prom
 
 export async function clearConversationMessages(convId: string): Promise<void> {
   await apiClient.delete(`/chat/conversations/${convId}/messages`)
+}
+
+export async function bulkDeleteConversations(convIds: string[]): Promise<void> {
+  await apiClient.post('/chat/conversations/bulk-delete', { conversation_ids: convIds })
+}
+
+export async function deleteMessage(convId: string, msgDbId: number): Promise<void> {
+  await apiClient.delete(`/chat/conversations/${convId}/messages/${msgDbId}`)
+}
+
+export async function bulkDeleteMessages(convId: string, msgDbIds: number[]): Promise<void> {
+  await apiClient.post(`/chat/conversations/${convId}/messages/bulk-delete`, { message_ids: msgDbIds })
 }
 

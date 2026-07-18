@@ -132,7 +132,7 @@ async def get_conversation_history(db: AsyncSession, user_id: str, conversation_
         ).order_by(ConversationHistory.id).limit(limit)
     )
     return [
-        {"role": r.role, "content": r.content, "metadata": r.msg_meta or "{}", "timestamp": r.timestamp.isoformat()}
+        {"id": r.id, "role": r.role, "content": r.content, "metadata": r.msg_meta or "{}", "timestamp": r.timestamp.isoformat()}
         for r in result.scalars().all()
     ]
 
@@ -161,6 +161,13 @@ async def list_conversations(db: AsyncSession, user_id: str) -> List[dict]:
 async def delete_conversation(db: AsyncSession, user_id: str, conversation_id: str) -> None:
     await db.execute(delete(ConversationHistory).where(ConversationHistory.user_id == user_id, ConversationHistory.conversation_id == conversation_id))
     await db.execute(delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id))
+    await db.commit()
+
+
+async def bulk_delete_conversations(db: AsyncSession, user_id: str, conversation_ids: list) -> None:
+    for conv_id in conversation_ids:
+        await db.execute(delete(ConversationHistory).where(ConversationHistory.user_id == user_id, ConversationHistory.conversation_id == conv_id))
+        await db.execute(delete(Conversation).where(Conversation.id == conv_id, Conversation.user_id == user_id))
     await db.commit()
 
 

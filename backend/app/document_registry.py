@@ -24,7 +24,7 @@ def _save_registry(registry: list) -> None:
         json.dump(registry, f, ensure_ascii=False, indent=2)
 
 
-def register_document(doc_id: str, filename: str, size: int, content_type: str, chunk_count: int) -> DocumentInfo:
+def register_document(doc_id: str, filename: str, size: int, content_type: str, chunk_count: int, chunk_texts: list = None) -> DocumentInfo:
     registry = _load_registry()
     now = datetime.now().isoformat()
     entry = {
@@ -34,6 +34,7 @@ def register_document(doc_id: str, filename: str, size: int, content_type: str, 
         "content_type": content_type,
         "uploaded_at": now,
         "chunk_count": chunk_count,
+        "chunks": [{"index": i, "content": t} for i, t in enumerate(chunk_texts or [])],
     }
     registry.append(entry)
     _save_registry(registry)
