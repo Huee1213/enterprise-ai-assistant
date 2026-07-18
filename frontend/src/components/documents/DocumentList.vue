@@ -6,6 +6,7 @@ import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const emit = defineEmits<{
   viewDetail: [docId: string]
+  deleted: []
 }>()
 
 const documents = ref<DocumentInfo[]>([])
@@ -41,6 +42,7 @@ async function executeDelete() {
   try {
     await deleteDocument(id)
     await fetchDocuments()
+    emit('deleted')
   } catch (err: any) {
     error.value = err.message || '删除失败'
   }

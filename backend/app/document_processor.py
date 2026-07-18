@@ -22,29 +22,63 @@ class DocumentProcessor:
 
     def read_file(self, file_path: str) -> Optional[str]:
         ext = Path(file_path).suffix.lower()
-        if ext == ".txt":
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        elif ext == ".md":
-            with open(file_path, "r", encoding="utf-8", errors="replace") as f:
-                return f.read()
-        elif ext == ".pdf":
-            return self._read_pdf(file_path)
-        elif ext == ".docx":
-            return self._read_docx(file_path)
-        elif ext == ".csv":
-            return self._read_csv(file_path)
+        try:
+            if ext in {".txt", ".md"}:
+                with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+                    return f.read()
+            elif ext == ".pdf":
+                return self._read_pdf(file_path)
+            elif ext == ".docx":
+                return self._read_docx(file_path)
+            elif ext == ".csv":
+                return self._read_csv(file_path)
+        except Exception as e:
+            raise ValueError(f"读取文件失败 ({ext}): {str(e)[:100]}")
         return None
 
     def _read_pdf(self, file_path: str) -> str:
         from pypdf import PdfReader
         reader = PdfReader(file_path)
-        return "\n".join(page.extract_text() or "" for page in reader.pages)
+        pages = []
+        for page in reader.pages:
+            text = page.extract_text()
+            if text:
+                pages.append(text)
+        return "\n".join(pages)
 
     def _read_docx(self, file_path: str) -> str:
+        """Extract all text from DOCX including paragraphs, tables, headers, footers."""
         from docx import Document as DocxDocument
         doc = DocxDocument(file_path)
-        return "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+        parts = []
+
+        # Body paragraphs
+        for p in doc.paragraphs:
+            t = p.text.strip()
+            if t:
+                parts.append(t)
+
+        # Tables
+        for table in doc.tables:
+            for row in table.rows:
+                cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
+                if cells:
+                    parts.append(" | ".join(cells))
+
+        # Headers and footers
+        for section in doc.sections:
+            for header in [section.header, section.first_page_header]:
+                if header:
+                    for p in header.paragraphs:
+                        if p.text.strip():
+                            parts.append(p.text.strip())
+            for footer in [section.footer, section.first_page_footer]:
+                if footer:
+                    for p in footer.paragraphs:
+                        if p.text.strip():
+                            parts.append(p.text.strip())
+
+        return "\n".join(parts)
 
     def _read_csv(self, file_path: str) -> str:
         import csv
@@ -57,8 +91,8 @@ class DocumentProcessor:
 
     def process_file(self, file_path: str, original_filename: str) -> List[Document]:
         content = self.read_file(file_path)
-        if content is None:
-            raise ValueError(f"Unsupported file type: {file_path}")
+        if not content:
+            raise ValueError(f"文件内容为空或无法解析: {original_filename}")
 
         file_hash = hashlib.md5(content.encode()).hexdigest()
         chunks = self.text_splitter.split_text(content)

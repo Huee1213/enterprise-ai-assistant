@@ -89,6 +89,20 @@ async def chat_stream(
                         if full_content:
                             meta = json.dumps({"steps": steps_data}, ensure_ascii=False) if steps_data else "{}"
                             await save_message(db, user_id, conv_id, "assistant", full_content, metadata_str=meta)
+                            # Auto-extract facts from user query
+                            try:
+                                from app.memory import add_user_fact
+                                q = request.message.lower()
+                                fact_kw = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
+                                for kw in fact_kw:
+                                    if kw in q:
+                                        idx = q.index(kw)
+                                        fact = request.message[idx:idx+100].split("\n")[0][:80]
+                                        if fact:
+                                            await add_user_fact(db, user_id, f"用户说: {fact}")
+                                        break
+                            except Exception:
+                                pass
                             try:
                                 from app.memory import add_conversation_summary
                                 hist = await get_conversation_history(db, user_id, conv_id)

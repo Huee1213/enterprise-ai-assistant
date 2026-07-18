@@ -6,11 +6,13 @@ import axios from 'axios'
 import apiClient from '@/api/client'
 import DocumentUpload from '@/components/documents/DocumentUpload.vue'
 import DocumentList from '@/components/documents/DocumentList.vue'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
 const documentListRef = ref<InstanceType<typeof DocumentList> | null>(null)
 const stats = ref({ total_docs: 0, total_chunks: 0 })
 const pdfBlobUrl = ref('')
 const loadingPdf = ref(false)
+const alertMsg = ref('')
 const docxHtml = ref('')
 const loadingDocx = ref(false)
 const csvRows = ref<string[][]>([])
@@ -65,7 +67,7 @@ async function viewDetail(docId: string) {
     if (data.content_type?.toLowerCase() === 'pdf') loadPdfBlob(docId)
     if (data.content_type?.toLowerCase() === 'docx') loadDocxHtml(docId)
     if (data.content_type?.toLowerCase() === 'csv') parseCsv(data.original_content)
-  } catch (err: any) { alert(err.message || '加载失败') }
+  } catch (err: any) { alertMsg.value = err.message || '加载失败' }
   loadingDetail.value = false
 }
 
@@ -129,7 +131,7 @@ onMounted(refreshStats)
       </div>
 
       <div class="rounded-xl border border-border bg-card p-6">
-        <DocumentList ref="documentListRef" @view-detail="viewDetail" />
+        <DocumentList ref="documentListRef" @view-detail="viewDetail" @deleted="refreshStats" />
       </div>
 
       <Teleport to="body">
@@ -218,6 +220,8 @@ onMounted(refreshStats)
           </div>
         </div>
       </Teleport>
+
+    <ConfirmDialog v-if="alertMsg" title="提示" :message="alertMsg" @confirm="alertMsg = ''" @cancel="alertMsg = ''" />
     </div>
   </div>
 </template>

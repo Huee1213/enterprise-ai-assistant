@@ -100,7 +100,7 @@ async def _process_and_register(file: UploadFile) -> UploadResponse:
         file_size = 0
 
     with open(file_path, "wb") as f:
-        await file.seek(0)
+        file.file.seek(0)
         shutil.copyfileobj(file.file, f)
 
     try:

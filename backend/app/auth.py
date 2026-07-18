@@ -131,6 +131,19 @@ async def list_users(db: AsyncSession) -> list:
     ]
 
 
+async def update_user(db: AsyncSession, user_id: str, display_name: str = None, password: str = None) -> bool:
+    result = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.role != "admin"))
+    user = result.scalar_one_or_none()
+    if not user:
+        return False
+    if display_name is not None:
+        user.display_name = display_name
+    if password is not None:
+        user.password_hash = _hash_password(password)
+    await db.commit()
+    return True
+
+
 async def delete_user(db: AsyncSession, user_id: str) -> bool:
     result = await db.execute(
         select(UserModel).where(UserModel.id == user_id, UserModel.role != "admin")

@@ -173,6 +173,146 @@ async def bulk_delete_conversations(db: AsyncSession, user_id: str, conversation
 
 # ── Memory Context Builder ─────────────────────────────────────────────
 
+async def get_user_stats(db: AsyncSession, user_id: str) -> dict:
+    from sqlalchemy import select as _select, func as _func, text as _t
+    conv_count = 0
+    msg_count = 0
+    fact_count = 0
+    summary_count = 0
+    try:
+        r = await db.execute(_select(_func.count()).select_from(ConversationHistory).where(ConversationHistory.user_id == user_id))
+        msg_count = r.scalar() or 0
+        r = await db.execute(_select(_func.count()).select_from(MemoryFact).where(MemoryFact.user_id == user_id))
+        fact_count = r.scalar() or 0
+        r = await db.execute(_select(_func.count()).select_from(ConversationSummary).where(ConversationSummary.user_id == user_id))
+        summary_count = r.scalar() or 0
+        r = await db.execute(_t("SELECT COUNT(DISTINCT conversation_id) FROM conversation_history WHERE user_id = :uid"), {"uid": user_id})
+        conv_count = r.scalar() or 0
+    except Exception:
+        pass
+    return {"conversations": conv_count, "messages": msg_count, "facts": fact_count, "summaries": summary_count}
+
+
+async def update_user_stats(db: AsyncSession, user_id: str, data: dict) -> dict:
+    """Store manual stat overrides in user preferences. Pass 'reset: True' to clear overrides."""
+    prefs = await get_user_preferences(db, user_id)
+    overrides = prefs.get("_stat_overrides", {})
+    if data.get("reset"):
+        overrides = {}
+    else:
+        for k in ("conversations", "messages", "facts", "summaries"):
+            if k in data and isinstance(data[k], (int, float)):
+                overrides[k] = int(data[k])
+    prefs["_stat_overrides"] = overrides
+    await update_user_preferences(db, user_id, prefs)
+    return overrides
+
+
+async def clear_user_memory(db: AsyncSession, user_id: str) -> dict:
+    """Delete all conversation history and memory facts for a user."""
+    from sqlalchemy import delete as _d
+    counts = {}
+    r = await db.execute(_d(ConversationHistory).where(ConversationHistory.user_id == user_id))
+    counts["messages"] = r.rowcount
+    r = await db.execute(_d(MemoryFact).where(MemoryFact.user_id == user_id))
+    counts["facts"] = r.rowcount
+    r = await db.execute(_d(ConversationSummary).where(ConversationSummary.user_id == user_id))
+    counts["summaries"] = r.rowcount
+    r = await db.execute(_d(Conversation).where(Conversation.user_id == user_id))
+    counts["conversations"] = r.rowcount
+    await db.commit()
+    # Clear stat overrides
+    await update_user_stats(db, user_id, {"reset": True})
+    return counts
+
+
+# ── Admin data browsing ──────────────────────────────────────────
+
+async def list_user_messages(db: AsyncSession, user_id: str, search: str = "", limit: int = 100, offset: int = 0) -> dict:
+    from sqlalchemy import or_
+    q = select(ConversationHistory).where(ConversationHistory.user_id == user_id)
+    if search:
+        q = q.where(ConversationHistory.content.ilike(f"%{search}%"))
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    q = q.order_by(desc(ConversationHistory.id)).limit(limit).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+    items = [{"id": r.id, "role": r.role, "content": r.content[:500], "conversation_id": r.conversation_id, "timestamp": r.timestamp.isoformat()} for r in rows]
+    return {"items": items, "total": total}
+
+
+async def list_user_facts(db: AsyncSession, user_id: str, search: str = "", limit: int = 100, offset: int = 0) -> dict:
+    q = select(MemoryFact).where(MemoryFact.user_id == user_id)
+    if search:
+        q = q.where(MemoryFact.content.ilike(f"%{search}%"))
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    q = q.order_by(desc(MemoryFact.id)).limit(limit).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+    items = [{"id": r.id, "content": r.content, "timestamp": r.timestamp.isoformat()} for r in rows]
+    return {"items": items, "total": total}
+
+
+async def list_user_summaries(db: AsyncSession, user_id: str, search: str = "", limit: int = 100, offset: int = 0) -> dict:
+    q = select(ConversationSummary).where(ConversationSummary.user_id == user_id)
+    if search:
+        q = q.where(ConversationSummary.summary.ilike(f"%{search}%"))
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    q = q.order_by(desc(ConversationSummary.id)).limit(limit).offset(offset)
+    rows = (await db.execute(q)).scalars().all()
+    items = [{"id": r.id, "summary": r.summary, "conv_id": r.conv_id, "timestamp": r.timestamp.isoformat()} for r in rows]
+    return {"items": items, "total": total}
+
+
+async def delete_messages_by_ids(db: AsyncSession, msg_ids: list[int], user_id: str) -> int:
+    from sqlalchemy import delete as _d, and_
+    r = await db.execute(
+        _d(ConversationHistory).where(
+            ConversationHistory.id.in_(msg_ids), ConversationHistory.user_id == user_id
+        )
+    )
+    await db.commit()
+    return r.rowcount
+
+
+async def update_fact(db: AsyncSession, fact_id: int, content: str, user_id: str) -> bool:
+    r = await db.execute(select(MemoryFact).where(MemoryFact.id == fact_id, MemoryFact.user_id == user_id))
+    f = r.scalar_one_or_none()
+    if not f:
+        return False
+    f.content = content
+    await db.commit()
+    return True
+
+
+async def delete_fact(db: AsyncSession, fact_id: int, user_id: str) -> bool:
+    r = await db.execute(select(MemoryFact).where(MemoryFact.id == fact_id, MemoryFact.user_id == user_id))
+    f = r.scalar_one_or_none()
+    if not f:
+        return False
+    await db.delete(f)
+    await db.commit()
+    return True
+
+
+async def update_summary(db: AsyncSession, summary_id: int, text: str, user_id: str) -> bool:
+    r = await db.execute(select(ConversationSummary).where(ConversationSummary.id == summary_id, ConversationSummary.user_id == user_id))
+    s = r.scalar_one_or_none()
+    if not s:
+        return False
+    s.summary = text
+    await db.commit()
+    return True
+
+
+async def delete_summary(db: AsyncSession, summary_id: int, user_id: str) -> bool:
+    r = await db.execute(select(ConversationSummary).where(ConversationSummary.id == summary_id, ConversationSummary.user_id == user_id))
+    s = r.scalar_one_or_none()
+    if not s:
+        return False
+    await db.delete(s)
+    await db.commit()
+    return True
+
+
 async def build_memory_context(db: AsyncSession, user_id: str) -> str:
     parts = []
     prefs = await get_user_preferences(db, user_id)
