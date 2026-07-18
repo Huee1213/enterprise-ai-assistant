@@ -1,0 +1,134 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: enterprise-postgres
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app123
+      POSTGRES_DB: enterprise_ai
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d enterprise_ai"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - ai-net
+
+  redis:
+    image: docker.io/valkey/valkey:8-alpine
+    container_name: enterprise-redis
+    command: valkey-server --save 30 1 --loglevel warning
+    restart: unless-stopped
+    networks:
+      - ai-net
+    volumes:
+      - redis_data:/data
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETGID
+      - SETUID
+      - DAC_OVERRIDE
+
+  searxng:
+    image: docker.io/searxng/searxng:latest
+    container_name: enterprise-searxng
+    restart: unless-stopped
+    networks:
+      - ai-net
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./searxng:/etc/searxng:rw
+    environment:
+      - SEARXNG_BASE_URL=http://localhost:8080/
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+    depends_on:
+      - redis
+
+  milvus:
+    image: milvusdb/milvus:v2.5.0
+    container_name: enterprise-milvus
+    command: ["milvus", "run", "standalone"]
+    ports:
+      - "19530:19530"
+      - "9091:9091"
+    environment:
+      ETCD_USE_EMBED: "true"
+      ETCD_DATA_DIR: "/var/lib/milvus/etcd"
+      COMMON_STORAGETYPE: "local"
+    volumes:
+      - milvus_data:/var/lib/milvus
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9091/healthz"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    networks:
+      - ai-net
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: enterprise-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - TZ=${TZ:-Asia/Shanghai}
+      - LLM_API_KEY=${LLM_API_KEY:-sk-your-key-here}
+      - LLM_API_BASE=${LLM_API_BASE:-https://api.openai.com/v1}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-3-small}
+      - EMBEDDING_API_KEY=${EMBEDDING_API_KEY:-}
+      - EMBEDDING_API_BASE=${EMBEDDING_API_BASE:-}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-4096}
+      - MILVUS_URI=http://milvus:19530
+      - UPLOAD_DIR=/app/data/documents
+      - SEARXNG_URL=http://searxng:8080
+      - DB_URL=postgresql+asyncpg://app:app123@postgres:5432/enterprise_ai
+    volumes:
+      - app_data:/app/data
+    depends_on:
+      milvus:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      searxng:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - ai-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: enterprise-frontend
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - ai-net
+
+volumes:
+  milvus_data:
+  app_data:
+  redis_data:
+  postgres_data:
+
+networks:
+  ai-net:
+    driver: bridge
