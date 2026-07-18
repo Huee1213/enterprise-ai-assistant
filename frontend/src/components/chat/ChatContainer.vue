@@ -49,9 +49,8 @@ function handleRetry(msgId: string) {
   <div class="flex flex-col min-h-0 flex-1">
     <div class="flex-1 overflow-y-auto px-4 py-6 min-h-0">
       <div class="max-w-4xl mx-auto space-y-6">
-        <Transition name="conv-switch" mode="out-in">
-          <!-- Empty state -->
-          <div v-if="chat.messages.length === 0 && !chat.loadingHistory" key="empty" class="flex flex-col items-center justify-center min-h-[300px] py-16 text-center">
+        <template v-if="chat.messages.length === 0">
+          <div class="flex flex-col items-center justify-center min-h-[300px] py-16 text-center">
             <div class="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mb-4">
               <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-primary">
                 <path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4Z" />
@@ -75,21 +74,19 @@ function handleRetry(msgId: string) {
               </div>
             </div>
           </div>
-          <!-- Messages state -->
-          <div v-else key="msgs">
-            <div v-if="chat.loadingHistory" class="text-center py-8 text-sm text-muted-foreground animate-fade-in">加载中...</div>
-            <ChatMessage
-              v-for="(msg, idx) in chat.messages"
-              :key="msg.id"
-              :message="msg"
-              :msgIndex="idx"
-              :isAdmin="auth.isAdmin"
-              :isStreaming="chat.isStreaming && msg === chat.messages[chat.messages.length - 1] && msg.role === 'assistant'"
-              @edit="handleEdit"
-              @retry="handleRetry"
-            />
-          </div>
-        </Transition>
+        </template>
+        <template v-else>
+          <ChatMessage
+            v-for="(msg, idx) in chat.messages"
+            :key="msg.id"
+            :message="msg"
+            :msgIndex="idx"
+            :isAdmin="auth.isAdmin"
+            :isStreaming="chat.isStreaming && msg === chat.messages[chat.messages.length - 1] && msg.role === 'assistant'"
+            @edit="handleEdit"
+            @retry="handleRetry"
+          />
+        </template>
         <div ref="messagesEndRef" />
       </div>
     </div>

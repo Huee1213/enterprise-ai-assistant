@@ -70,9 +70,8 @@ export const useChatStore = defineStore('chat', () => {
   }
 
   async function selectConversation(id: string) {
-    activeConversationId.value = id
     const conv = conversations.value.find(c => c.id === id)
-    if (!conv || conv.messages.length > 0) return
+    if (!conv || conv.messages.length > 0) { activeConversationId.value = id; return }
     loadingHistory.value = true
     try {
       const msgs = await fetchConversationMessages(id)
@@ -93,6 +92,7 @@ export const useChatStore = defineStore('chat', () => {
         })
       }
     } catch { /* ignore */ }
+    activeConversationId.value = id
     loadingHistory.value = false
   }
 
