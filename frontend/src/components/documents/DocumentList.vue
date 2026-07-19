@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, nextTick } from 'vue'
-import { listDocuments, deleteDocument } from '@/api/documents'
+import { ref, computed, onMounted, nextTick } from 'vue'
+import { listDocuments, deleteDocument, batchDeleteDocuments } from '@/api/documents'
 import type { DocumentInfo } from '@/types'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 
@@ -12,9 +12,32 @@ const emit = defineEmits<{
 const documents = ref<DocumentInfo[]>([])
 const isLoading = ref(true)
 const error = ref('')
-const confirmDeleteId = ref<string | null>(null)
+const confirmDeleteIds = ref<string[] | null>(null)
 const listRef = ref<HTMLDivElement | null>(null)
+const selectedIds = ref<Set<string>>(new Set())
 let scrollTop = 0
+
+const allSelected = computed(() =>
+  documents.value.length > 0 && selectedIds.value.size === documents.value.length
+)
+
+const indeterminate = computed(() =>
+  selectedIds.value.size > 0 && selectedIds.value.size < documents.value.length
+)
+
+function toggleSelect(id: string) {
+  const s = new Set(selectedIds.value)
+  if (s.has(id)) { s.delete(id) } else { s.add(id) }
+  selectedIds.value = s
+}
+
+function toggleSelectAll() {
+  if (allSelected.value) {
+    selectedIds.value = new Set()
+  } else {
+    selectedIds.value = new Set(documents.value.map(d => d.id))
+  }
+}
 
 async function fetchDocuments() {
   scrollTop = listRef.value?.scrollTop || 0
@@ -32,23 +55,32 @@ async function fetchDocuments() {
 }
 
 function confirmDelete(id: string) {
-  confirmDeleteId.value = id
+  confirmDeleteIds.value = [id]
+}
+
+function confirmBatchDelete() {
+  if (selectedIds.value.size === 0) return
+  confirmDeleteIds.value = Array.from(selectedIds.value)
 }
 
 async function executeDelete() {
-  const id = confirmDeleteId.value
-  confirmDeleteId.value = null
-  if (!id) return
+  const ids = confirmDeleteIds.value
+  confirmDeleteIds.value = null
+  if (!ids || ids.length === 0) return
   try {
-    await deleteDocument(id)
-    await fetchDocuments()
+    if (ids.length === 1) {
+      await deleteDocument(ids[0])
+    } else {
+      await batchDeleteDocuments(ids)
+    }
+    selectedIds.value = new Set()
     emit('deleted')
   } catch (err: any) {
     error.value = err.message || '删除失败'
   }
 }
 
-function cancelDelete() { confirmDeleteId.value = null }
+function cancelDelete() { confirmDeleteIds.value = null }
 
 function formatSize(bytes: number): string {
   if (bytes === 0) return '0 B'
@@ -58,14 +90,30 @@ function formatSize(bytes: number): string {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
 }
 
-defineExpose({ fetchDocuments })
+function setDocuments(data: any[]) {
+  documents.value = data
+  selectedIds.value = new Set()
+  isLoading.value = false
+}
+
+defineExpose({ fetchDocuments, setDocuments })
 
 onMounted(fetchDocuments)
 </script>
 
 <template>
   <div ref="listRef">
-    <h3 class="text-sm font-medium mb-3">已上传文档</h3>
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-medium">已上传文档</h3>
+      <button
+        v-if="selectedIds.size > 0"
+        @click="confirmBatchDelete"
+        class="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+      >
+        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+        删除 ({{ selectedIds.size }})
+      </button>
+    </div>
 
     <div v-if="isLoading" class="flex justify-center py-8">
       <div class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
@@ -76,13 +124,34 @@ onMounted(fetchDocuments)
     <div v-else-if="documents.length === 0" class="text-center text-muted-foreground text-sm py-8">暂无上传文档</div>
 
     <div v-else class="space-y-2">
+      <div class="flex items-center gap-2 pb-1 text-xs text-muted-foreground border-b border-border">
+        <label class="flex items-center gap-1.5 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            :checked="allSelected"
+            :indeterminate="indeterminate"
+            @change="toggleSelectAll"
+            class="accent-primary"
+          />
+          <span>全选</span>
+        </label>
+      </div>
+
       <div
         v-for="(doc, idx) in documents"
         :key="doc.id"
         class="flex items-center justify-between rounded-lg border border-border p-3 hover:bg-muted/30 transition-colors animate-fade-in"
+        :class="{ 'border-primary/40 bg-primary/5': selectedIds.has(doc.id) }"
         :style="{ animationDelay: `${idx * 0.03}s` }"
       >
         <div class="flex items-center gap-3 min-w-0 flex-1">
+          <input
+            type="checkbox"
+            :checked="selectedIds.has(doc.id)"
+            @change="toggleSelect(doc.id)"
+            class="shrink-0 accent-primary"
+            @click.stop
+          />
           <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary">
               <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z" /><polyline points="14 2 14 8 20 8" />
@@ -106,6 +175,13 @@ onMounted(fetchDocuments)
       </div>
     </div>
 
-    <ConfirmDialog v-if="confirmDeleteId" title="删除文档" message="确定删除此文档？删除后文本块将从知识库中移除，不可恢复。" destructive @confirm="executeDelete" @cancel="cancelDelete" />
+    <ConfirmDialog
+      v-if="confirmDeleteIds"
+      title="删除文档"
+      :message="confirmDeleteIds.length === 1 ? '确定删除此文档？删除后文本块将从知识库中移除，不可恢复。' : `确定删除选中的 ${confirmDeleteIds.length} 个文档？删除后文本块将从知识库中移除，不可恢复。`"
+      destructive
+      @confirm="executeDelete"
+      @cancel="cancelDelete"
+    />
   </div>
 </template>

@@ -1,5 +1,6 @@
 import json
 import uuid
+import asyncio
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -8,8 +9,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import ChatRequest, ChatResponse
 from app.config import settings
 from app.auth import get_current_user
-from app.database import get_db
-from app.memory import build_memory_context, save_message, list_conversations, get_conversation_history, delete_conversation, update_conversation_title, bulk_delete_conversations, ConversationHistory
+from app.database import get_db, AsyncSessionLocal
+from app.memory import build_memory_context, save_message, list_conversations, get_conversation_history, get_conversation_summary, delete_conversation, update_conversation_title, bulk_delete_conversations, ConversationHistory, add_user_fact, add_conversation_summary
 
 router = APIRouter(prefix="/api/chat", tags=["Chat"])
 
@@ -46,7 +47,6 @@ async def chat_stream(
     user_id = current_user["user_id"]
     memory_ctx = await build_memory_context(db, user_id)
 
-    # Load recent conversation history (last 10 messages) for context
     history = await get_conversation_history(db, user_id, conv_id, limit=10)
     history_ctx = ""
     if history:
@@ -55,8 +55,12 @@ async def chat_stream(
             role_label = "用户" if h["role"] == "user" else "助手"
             lines.append(f"{role_label}: {h['content'][:200]}")
         history_ctx = "\n".join(lines)
+    conv_summary = await get_conversation_summary(db, user_id, conv_id)
+    if conv_summary:
+        summary_note = f"\n\n对话摘要: {conv_summary}"
+        memory_ctx = memory_ctx + summary_note if memory_ctx else summary_note
 
-    # Save user message to history
+    # Save user message (use the dependency session, then release it)
     await save_message(db, user_id, conv_id, "user", request.message)
 
     if request.use_agent:
@@ -69,56 +73,65 @@ async def chat_stream(
     async def _stream_and_save():
         full_content = ""
         steps_data = []
-        async for event in generator:
-            yield event
-            try:
-                prefix = "data: "
-                if event.startswith(prefix):
-                    parsed = json.loads(event[len(prefix):])
-                    ev_type = parsed.get("event")
-                    if ev_type == "token":
-                        full_content += parsed.get("data", "")
-                    elif ev_type == "step" or ev_type == "steps":
-                        step_list = parsed.get("data", [])
-                        if isinstance(step_list, dict):
-                            step_list = [step_list]
-                        for s in step_list:
-                            if s not in steps_data:
-                                steps_data.append(s)
-                    elif ev_type == "done":
-                        if full_content:
-                            meta = json.dumps({"steps": steps_data}, ensure_ascii=False) if steps_data else "{}"
-                            await save_message(db, user_id, conv_id, "assistant", full_content, metadata_str=meta)
-                            # Auto-extract facts from user query
-                            try:
-                                from app.memory import add_user_fact
-                                q = request.message.lower()
-                                fact_kw = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
-                                for kw in fact_kw:
-                                    if kw in q:
-                                        idx = q.index(kw)
-                                        fact = request.message[idx:idx+100].split("\n")[0][:80]
-                                        if fact:
-                                            await add_user_fact(db, user_id, f"用户说: {fact}")
-                                        break
-                            except Exception:
-                                pass
-                            try:
-                                from app.memory import add_conversation_summary
-                                hist = await get_conversation_history(db, user_id, conv_id)
-                                if len(hist) > 0 and len(hist) % 6 == 0:
-                                    from langchain_openai import ChatOpenAI
-                                    from langchain_core.messages import SystemMessage, HumanMessage
-                                    llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-                                    text = "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:300]}" for h in hist[-6:])
-                                    resp = await llm.ainvoke([SystemMessage(content="用30字以内概括这段对话。"), HumanMessage(content=text)])
-                                    summary = resp.content.strip()[:100]
-                                    if summary:
-                                        await add_conversation_summary(db, user_id, conv_id, summary)
-                            except Exception:
-                                pass
-            except Exception:
-                pass
+        try:
+            async for event in generator:
+                yield event
+                try:
+                    prefix = "data: "
+                    if event.startswith(prefix):
+                        parsed = json.loads(event[len(prefix):])
+                        ev_type = parsed.get("event")
+                        if ev_type == "token":
+                            full_content += parsed.get("data", "")
+                        elif ev_type == "step" or ev_type == "steps":
+                            step_list = parsed.get("data", [])
+                            if isinstance(step_list, dict):
+                                step_list = [step_list]
+                            for s in step_list:
+                                if s not in steps_data:
+                                    steps_data.append(s)
+                        elif ev_type == "done":
+                            if full_content:
+                                meta = json.dumps({"steps": steps_data}, ensure_ascii=False) if steps_data else "{}"
+                                await save_message(db, user_id, conv_id, "assistant", full_content, metadata_str=meta)
+                                try:
+                                    q = request.message.lower()
+                                    fact_kw = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
+                                    for kw in fact_kw:
+                                        if kw in q:
+                                            idx = q.index(kw)
+                                            fact = request.message[idx:idx+100].split("\n")[0][:80]
+                                            if fact:
+                                                await add_user_fact(db, user_id, f"用户说: {fact}")
+                                            break
+                                except Exception:
+                                    pass
+                                try:
+                                    hist = await get_conversation_history(db, user_id, conv_id)
+                                    existing = await get_conversation_summary(db, user_id, conv_id)
+                                    msg_count = len(hist)
+                                    if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
+                                        from langchain_openai import ChatOpenAI
+                                        from langchain_core.messages import SystemMessage, HumanMessage
+                                        llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=250, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                                        context_parts = []
+                                        if existing:
+                                            context_parts.append(f"旧摘要: {existing}")
+                                        context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:300]}" for h in hist[-10:]))
+                                        resp = await llm.ainvoke([SystemMessage(content="用50字以内概括这段对话，包含关键信息。"), HumanMessage(content="\n\n".join(context_parts))])
+                                        summary = resp.content.strip()[:150]
+                                        if summary:
+                                            await add_conversation_summary(db, user_id, conv_id, summary)
+                                except Exception:
+                                    pass
+                except GeneratorExit:
+                    raise
+                except Exception:
+                    pass
+        except GeneratorExit:
+            pass
+        except asyncio.CancelledError:
+            pass
 
     return StreamingResponse(
         _stream_and_save(),
@@ -290,6 +303,59 @@ async def bulk_delete_messages(
     ))
     await db.commit()
     return {"status": "deleted", "count": len(req.message_ids)}
+
+
+@router.post("/conversations/{conv_id}/regenerate-title")
+async def regenerate_title(
+    conv_id: str,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    user_id = current_user["user_id"]
+    from app.memory import get_conversation_summary
+    summary = await get_conversation_summary(db, user_id, conv_id) or ""
+    history = await get_conversation_history(db, user_id, conv_id, limit=6)
+    context_parts = []
+    if summary:
+        context_parts.append(f"对话摘要: {summary}")
+    if history:
+        lines = [f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:200]}" for h in history[-4:]]
+        context_parts.append("最近消息:\n" + "\n".join(lines))
+    prompt = "\n\n".join(context_parts) if context_parts else "(无内容)"
+
+    new_title = ""
+    try:
+        from langchain_openai import ChatOpenAI
+        from langchain_core.messages import SystemMessage, HumanMessage
+        llm = ChatOpenAI(model=settings.llm_model, temperature=0.1, max_tokens=15, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+        # Build a shorter, clearer prompt
+        text_for_llm = summary[:100] if summary else ""
+        if not text_for_llm and history:
+            first = next((h["content"][:50] for h in history if h["role"] == "user"), "")
+            text_for_llm = first
+        if text_for_llm:
+            resp = await llm.ainvoke([
+                SystemMessage(content="你是标题生成器。只输出3-6个字的标题，不要解释。"),
+                HumanMessage(content=f"为这段话生成标题: {text_for_llm}"),
+            ])
+            t = resp.content.strip().strip('"').strip("'").split('\n')[0].strip()[:15]
+            if t and len(t) <= 12 and len(t) >= 2 and "标题" not in t and "生成" not in t:
+                new_title = t
+    except Exception:
+        pass
+
+    # Fallback to summary / first message
+    if not new_title:
+        if summary:
+            new_title = summary[:12]
+        elif history:
+            first = next((h["content"][:12] for h in history if h["role"] == "user"), None)
+            new_title = (first + "...") if first else "新对话"
+        else:
+            new_title = "新对话"
+
+    await update_conversation_title(db, user_id, conv_id, new_title)
+    return {"status": "regenerated", "title": new_title}
 
 
 @router.put("/conversations/{conv_id}/title")

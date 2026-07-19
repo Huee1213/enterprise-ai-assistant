@@ -94,6 +94,11 @@ export async function saveConversationTitle(convId: string, title: string): Prom
   await apiClient.put(`/chat/conversations/${convId}/title`, { title })
 }
 
+export async function regenerateConversationTitle(convId: string): Promise<string> {
+  const { data } = await apiClient.post(`/chat/conversations/${convId}/regenerate-title`)
+  return data.title
+}
+
 export async function clearConversationMessages(convId: string): Promise<void> {
   await apiClient.delete(`/chat/conversations/${convId}/messages`)
 }

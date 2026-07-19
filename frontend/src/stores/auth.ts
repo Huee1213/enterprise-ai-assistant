@@ -45,14 +45,21 @@ export const useAuthStore = defineStore('auth', () => {
     return data
   }
 
+  let _fetchPromise: Promise<void> | null = null
+
   async function fetchMe() {
     if (!token.value) return
-    try {
-      const { data } = await apiClient.get('/auth/me')
-      user.value = data
-    } catch {
-      clearAuth()
-    }
+    if (_fetchPromise) return _fetchPromise  // deduplicate concurrent calls
+    _fetchPromise = (async () => {
+      try {
+        const { data } = await apiClient.get('/auth/me')
+        user.value = data
+      } catch {
+        clearAuth()
+      }
+    })()
+    await _fetchPromise
+    _fetchPromise = null
   }
 
   async function logout() {

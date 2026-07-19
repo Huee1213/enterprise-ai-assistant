@@ -159,19 +159,18 @@ export const useChatStore = defineStore('chat', () => {
     if (!conv) return
     const idx = conv.messages.findIndex(m => m.id === msgId)
     if (idx === -1) return
-    // Clear backend history for this conversation before resending
     try { await clearConversationMessages(conv.id) } catch { /* ignore */ }
     conv.messages.splice(idx)
     conv.updatedAt = new Date()
-    sendMessage(newContent)
+    sendMessage(newContent, true)  // skipTitle = true (conversation already exists)
   }
 
-  function sendMessage(content: string): Promise<void> {
+  function sendMessage(content: string, skipTitle = false): Promise<void> {
     return new Promise((resolve) => {
       const conv = activeConversation.value
       if (!conv || isStreaming.value) { resolve(); return }
 
-      const isFirst = conv.messages.length === 0
+      const isFirst = conv.messages.length === 0 && !skipTitle
       addMessage({ role: 'user', content })
       addMessage({ role: 'assistant', content: '' })
       isStreaming.value = true

@@ -85,9 +85,25 @@ async def get_user_facts(db: AsyncSession, user_id: str, limit: int = 50) -> Lis
 # ── Conversation Summaries ──────────────────────────────────────────────
 
 async def add_conversation_summary(db: AsyncSession, user_id: str, conv_id: str, summary: str) -> None:
+    # Upsert: delete existing summary for this conversation, then insert new one
+    await db.execute(
+        delete(ConversationSummary).where(
+            ConversationSummary.user_id == user_id, ConversationSummary.conv_id == conv_id
+        )
+    )
     entry = ConversationSummary(user_id=user_id, conv_id=conv_id, summary=summary, timestamp=datetime.now(timezone.utc))
     db.add(entry)
     await db.commit()
+
+
+async def get_conversation_summary(db: AsyncSession, user_id: str, conv_id: str) -> str:
+    result = await db.execute(
+        select(ConversationSummary).where(
+            ConversationSummary.user_id == user_id, ConversationSummary.conv_id == conv_id
+        ).order_by(desc(ConversationSummary.id)).limit(1)
+    )
+    s = result.scalar_one_or_none()
+    return s.summary if s else ""
 
 
 async def get_recent_summaries(db: AsyncSession, user_id: str, limit: int = 5) -> List[str]:
@@ -161,6 +177,7 @@ async def list_conversations(db: AsyncSession, user_id: str) -> List[dict]:
 async def delete_conversation(db: AsyncSession, user_id: str, conversation_id: str) -> None:
     await db.execute(delete(ConversationHistory).where(ConversationHistory.user_id == user_id, ConversationHistory.conversation_id == conversation_id))
     await db.execute(delete(Conversation).where(Conversation.id == conversation_id, Conversation.user_id == user_id))
+    await db.execute(delete(ConversationSummary).where(ConversationSummary.user_id == user_id, ConversationSummary.conv_id == conversation_id))
     await db.commit()
 
 
@@ -237,6 +254,19 @@ async def list_user_messages(db: AsyncSession, user_id: str, search: str = "", l
     q = q.order_by(desc(ConversationHistory.id)).limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
     items = [{"id": r.id, "role": r.role, "content": r.content[:500], "conversation_id": r.conversation_id, "timestamp": r.timestamp.isoformat()} for r in rows]
+    # Attach conversation titles
+    conv_ids = list(set(r.conversation_id for r in rows))
+    if conv_ids:
+        title_map = {}
+        for cid in conv_ids:
+            r2 = await db.execute(select(Conversation).where(Conversation.id == cid, Conversation.user_id == user_id))
+            c = r2.scalar_one_or_none()
+            if c and c.title and c.title != "新对话":
+                title_map[cid] = c.title
+        if title_map:
+            for item in items:
+                if item["conversation_id"] in title_map:
+                    item["title"] = title_map[item["conversation_id"]]
     return {"items": items, "total": total}
 
 
@@ -259,6 +289,16 @@ async def list_user_summaries(db: AsyncSession, user_id: str, search: str = "", 
     q = q.order_by(desc(ConversationSummary.id)).limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
     items = [{"id": r.id, "summary": r.summary, "conv_id": r.conv_id, "timestamp": r.timestamp.isoformat()} for r in rows]
+    # Attach conversation titles
+    conv_ids = list(set(r.conv_id for r in rows))
+    if conv_ids:
+        for cid in conv_ids:
+            r2 = await db.execute(select(Conversation).where(Conversation.id == cid, Conversation.user_id == user_id))
+            c = r2.scalar_one_or_none()
+            if c and c.title and c.title != "新对话":
+                for item in items:
+                    if item["conv_id"] == cid:
+                        item["title"] = c.title
     return {"items": items, "total": total}
 
 

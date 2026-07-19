@@ -31,3 +31,8 @@ export async function listDocuments(): Promise<DocumentInfo[]> {
 export async function deleteDocument(id: string): Promise<void> {
   await apiClient.delete(`/documents/${id}`)
 }
+
+export async function batchDeleteDocuments(ids: string[]): Promise<{ deleted: number }> {
+  const { data } = await apiClient.post<{ status: string; deleted: number }>('/documents/batch-delete', { ids })
+  return data
+}

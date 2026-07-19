@@ -52,7 +52,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="h-full overflow-y-auto p-6 space-y-6">
+  <div class="h-full overflow-y-auto p-4 md:p-6 space-y-4 md:space-y-6">
     <div>
       <h1 class="text-xl font-bold">总览</h1>
       <p class="text-sm text-muted-foreground mt-0.5">系统运行状态与统计数据</p>
@@ -129,8 +129,8 @@ onMounted(async () => {
           </div>
         </div>
 
-        <div v-if="health.data" class="p-5">
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-1">
+        <div v-if="health.data" class="p-4 md:p-5">
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-x-8 gap-y-1">
             <div v-for="svc in (health.data.services || [])" :key="svc.name" class="flex items-center justify-between py-2.5 border-b border-border/40">
               <div class="flex items-center gap-2.5">
                 <span class="w-2 h-2 rounded-full" :class="svc.status.startsWith('connected') || svc.status.startsWith('configured') ? 'bg-green-500' : 'bg-red-500'" />

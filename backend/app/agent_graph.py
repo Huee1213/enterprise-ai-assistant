@@ -50,7 +50,7 @@ async def call_model(state: MessagesState) -> dict:
     )
     msgs = [system] + list(state["messages"])
     try:
-        response = llm.invoke(msgs)
+        response = await llm.ainvoke(msgs)
     except Exception as e:
         err = str(e)
         if "ResourceExhausted" in err or "rate limit" in err.lower():
@@ -112,49 +112,53 @@ def _get_full_llm():
 async def stream_rag(query: str, memory_context: str = "",
                      history_ctx: str = "", db=None, user_id: str = "",
                      conv_id: str = "") -> AsyncGenerator[str, None]:
-    from app.vector_store import similarity_search
-    temp_llm = _get_full_llm()
-    docs = similarity_search(query, k=settings.top_k)
-    context = "\n\n".join(
-        f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
-    ) if docs else "No relevant documents found."
+    try:
+        from app.vector_store import similarity_search
+        temp_llm = _get_full_llm()
+        docs = similarity_search(query, k=settings.top_k)
+        context = "\n\n".join(
+            f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
+        ) if docs else "No relevant documents found."
 
-    sources = [
-        {"source": d.metadata.get("source", "Unknown"), "content": d.page_content[:200]}
-        for d in docs
-    ]
-    yield f"data: {json.dumps({'event': 'sources', 'data': sources})}\n\n"
+        sources = [
+            {"source": d.metadata.get("source", "Unknown"), "content": d.page_content[:200]}
+            for d in docs
+        ]
+        yield f"data: {json.dumps({'event': 'sources', 'data': sources})}\n\n"
 
-    history_block = f"\n\nRecent conversation:\n{history_ctx}" if history_ctx else ""
-    sys = f"You are an enterprise knowledge assistant.\n\nUser context:\n{memory_context}{history_block}\n\nAnswer based on the context below.\nContext:\n{context}"
+        history_block = f"\n\nRecent conversation:\n{history_ctx}" if history_ctx else ""
+        sys = f"You are an enterprise knowledge assistant.\n\nUser context:\n{memory_context}{history_block}\n\nAnswer based on the context below.\nContext:\n{context}"
 
-    full_answer = ""
-    async for chunk in temp_llm.astream([SystemMessage(content=sys), HumanMessage(content=query)]):
-        reasoning = _emit_reasoning(chunk)
-        if reasoning:
-            yield f"data: {json.dumps({'event': 'reasoning', 'data': reasoning})}\n\n"
-        if chunk.content:
-            full_answer += chunk.content
-            yield f"data: {json.dumps({'event': 'token', 'data': chunk.content})}\n\n"
+        full_answer = ""
+        async for chunk in temp_llm.astream([SystemMessage(content=sys), HumanMessage(content=query)]):
+            reasoning = _emit_reasoning(chunk)
+            if reasoning:
+                yield f"data: {json.dumps({'event': 'reasoning', 'data': reasoning})}\n\n"
+            if chunk.content:
+                full_answer += chunk.content
+                yield f"data: {json.dumps({'event': 'token', 'data': chunk.content})}\n\n"
 
-    # Auto-extract facts for memory
-    if db and user_id:
-        try:
-            from app.memory import add_user_fact
-            fact_keywords = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
-            q_lower = query.lower()
-            for kw in fact_keywords:
-                if kw in q_lower:
-                    idx = q_lower.index(kw)
-                    fact = query[idx:idx + 100].split("\n")[0][:80]
-                    if fact:
-                        await add_user_fact(db, user_id, f"用户说: {fact}")
-                        yield f"data: {json.dumps({'event': 'step', 'data': {'step': 0, 'action': 'memory', 'input': '', 'output': '已保存记忆: ' + fact, 'duration_ms': 0}})}\n\n"
-                    break
-        except Exception:
-            pass
+        if db and user_id:
+            try:
+                from app.memory import add_user_fact
+                fact_keywords = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
+                q_lower = query.lower()
+                for kw in fact_keywords:
+                    if kw in q_lower:
+                        idx = q_lower.index(kw)
+                        fact = query[idx:idx + 100].split("\n")[0][:80]
+                        if fact:
+                            await add_user_fact(db, user_id, f"用户说: {fact}")
+                            yield f"data: {json.dumps({'event': 'step', 'data': {'step': 0, 'action': 'memory', 'input': '', 'output': '已保存记忆: ' + fact, 'duration_ms': 0}})}\n\n"
+                        break
+            except Exception:
+                pass
 
-    yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
+        yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
+    except (GeneratorExit, asyncio.CancelledError):
+        pass
+    except Exception:
+        yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
 
 
 async def stream_agent(query: str, conv_id: str, memory_context: str = "",
@@ -204,6 +208,8 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
                                 "duration_ms": 0,
                             }
                             yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
+    except (GeneratorExit, asyncio.CancelledError):
+        return
     except Exception as e:
         import traceback, sys as _sys
         traceback.print_exc(file=_sys.stderr)

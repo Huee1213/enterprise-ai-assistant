@@ -35,7 +35,7 @@ async def _reindex_registry():
         if not os.path.exists(file_path):
             continue
         try:
-            documents = processor.process_file(file_path, filename)
+            documents = processor.process_file(file_path, filename, doc_id=doc_id)
             add_documents(documents)
         except Exception:
             pass

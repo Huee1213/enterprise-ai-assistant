@@ -67,7 +67,7 @@ async def upload_document(file: UploadFile = File(...), admin_user: dict = Depen
         shutil.copyfileobj(file.file, f)
 
     try:
-        documents = processor.process_file(file_path, file.filename or safe_name)
+        documents = processor.process_file(file_path, file.filename or safe_name, doc_id=doc_id)
         ids = add_documents(documents)
         chunk_texts = [d.page_content for d in documents]
         cc = len(chunk_texts)
@@ -104,7 +104,7 @@ async def _process_and_register(file: UploadFile) -> UploadResponse:
         shutil.copyfileobj(file.file, f)
 
     try:
-        documents = processor.process_file(file_path, file.filename or safe_name)
+        documents = processor.process_file(file_path, file.filename or safe_name, doc_id=doc_id)
         ids = add_documents(documents)
         chunk_texts = [d.page_content for d in documents]
         cc = len(chunk_texts)
@@ -217,5 +217,20 @@ async def delete_document_route(doc_id: str, admin_user: dict = Depends(require_
         vector_delete(doc_id)
         registry_delete(doc_id)
         return {"status": "deleted", "id": doc_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/batch-delete", response_model=dict)
+async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(require_admin)):
+    try:
+        from app.vector_store import batch_delete_documents as vector_batch_delete
+        doc_ids: list = body.get("ids", [])
+        if not doc_ids:
+            return {"status": "ok", "deleted": 0}
+        vector_batch_delete(doc_ids)
+        for doc_id in doc_ids:
+            registry_delete(doc_id)
+        return {"status": "ok", "deleted": len(doc_ids)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

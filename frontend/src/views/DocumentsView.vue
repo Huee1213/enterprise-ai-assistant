@@ -18,7 +18,7 @@ const loadingDocx = ref(false)
 const csvRows = ref<string[][]>([])
 const csvHeaders = ref<string[]>([])
 
-function onUploaded() { documentListRef.value?.fetchDocuments(); refreshStats() }
+function onUploaded() { refreshStats() }
 
 const detailDoc = ref<any>(null)
 const detailTab = ref<'original' | 'chunks'>('original')
@@ -94,6 +94,7 @@ async function refreshStats() {
     const { data } = await apiClient.get('/documents/list')
     stats.value.total_docs = data.length
     stats.value.total_chunks = data.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
+    documentListRef.value?.setDocuments(data)  // update list without extra API call
   } catch {}
 }
 
@@ -111,31 +112,32 @@ async function downloadFile() {
   } catch {}
 }
 
-onMounted(refreshStats)
+// DocumentList already fetches stats via fetchDocuments; only refresh after mutations
+// onMounted(refreshStats) ← removed to avoid duplicate /api/documents/list calls
 </script>
 
 <template>
   <div class="h-full overflow-y-auto">
-    <div class="max-w-4xl mx-auto p-6 space-y-6">
-      <div class="flex items-center justify-between">
-        <div><h1 class="text-2xl font-bold">文档管理</h1><p class="text-sm text-muted-foreground mt-0.5">上传企业文档以构建知识库</p></div>
+    <div class="max-w-4xl mx-auto p-4 md:p-6 space-y-4 md:space-y-6">
+      <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div><h1 class="text-xl md:text-2xl font-bold">文档管理</h1><p class="text-sm text-muted-foreground mt-0.5">上传企业文档以构建知识库</p></div>
         <div class="flex items-center gap-4 text-xs text-muted-foreground">
           <span>文档: <strong class="text-foreground">{{ stats.total_docs }}</strong></span>
           <span>文本块: <strong class="text-foreground">{{ stats.total_chunks }}</strong></span>
         </div>
       </div>
 
-      <div class="rounded-xl border border-border bg-card p-6">
+      <div class="rounded-xl border border-border bg-card p-4 md:p-6">
         <h2 class="text-sm font-semibold mb-4">上传文档</h2>
         <DocumentUpload @uploaded="onUploaded" />
       </div>
 
-      <div class="rounded-xl border border-border bg-card p-6">
+      <div class="rounded-xl border border-border bg-card p-4 md:p-6">
         <DocumentList ref="documentListRef" @view-detail="viewDetail" @deleted="refreshStats" />
       </div>
 
       <Teleport to="body">
-        <div v-if="detailDoc" class="fixed inset-0 z-[9999] flex items-start justify-center bg-black/40 backdrop-blur-sm p-4 pt-12 overflow-y-auto" @click="closeDetail">
+        <div v-if="detailDoc" class="fixed inset-0 z-[9999] flex items-start justify-center bg-black/40 backdrop-blur-sm p-2 md:p-4 pt-8 md:pt-12 overflow-y-auto" @click="closeDetail">
           <div class="bg-card border border-border rounded-xl w-full max-w-3xl shadow-xl animate-scale-in overflow-hidden" @click.stop>
             <div class="px-5 py-4 border-b border-border flex items-center justify-between">
               <div class="min-w-0">

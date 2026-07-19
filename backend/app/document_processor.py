@@ -89,7 +89,7 @@ class DocumentProcessor:
                 rows.append(", ".join(row))
         return "\n".join(rows)
 
-    def process_file(self, file_path: str, original_filename: str) -> List[Document]:
+    def process_file(self, file_path: str, original_filename: str, doc_id: Optional[str] = None) -> List[Document]:
         content = self.read_file(file_path)
         if not content:
             raise ValueError(f"文件内容为空或无法解析: {original_filename}")
@@ -97,7 +97,7 @@ class DocumentProcessor:
         file_hash = hashlib.md5(content.encode()).hexdigest()
         chunks = self.text_splitter.split_text(content)
 
-        doc_id = str(uuid.uuid4())
+        doc_id = doc_id or str(uuid.uuid4())
         documents = []
         for i, chunk in enumerate(chunks):
             metadata = {
