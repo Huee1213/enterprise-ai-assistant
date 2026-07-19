@@ -8,6 +8,7 @@
 
 - **🔐 用户认证与角色权限** — JWT 双角色（管理员/员工），管理员管理知识库与用户，员工使用问答
 - **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV，单文件 500MB 上限，支持多文件批量上传
+- **🗑️ 文档多选删除** — 支持逐条删除和批量删除（`POST /api/documents/batch-delete`）
 - **🤖 LangGraph Agent 工作流** — 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
 - **🔍 本地搜索引擎 (SearXNG)** — 自托管元搜索引擎，聚合 Google/Bing/Brave/Startpage 等，无需 API Key
 - **🧠 长短期记忆系统** — PostgreSQL 持久化，偏好/事实/对话历史/自动摘要
@@ -15,6 +16,7 @@
 - **📋 对话管理** — 单条消息删除+二次确认、重新生成、复制、编辑问题
 - **📖 文档预览** — 原始内容(含 PDF 内联/DOCX 样式/CSV 表格) + 文本块详情
 - **🔎 Agent 调试面板** — 管理员可实时查看每步推理（LLM 调用、工具执行、输入输出）
+- **📱 响应式布局** — 桌面端侧栏可缩边（仅图标），移动端滑出式侧栏 + Agent 面板
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
 
@@ -91,13 +93,6 @@ enterprise-ai-assistant/
 │   └── package.json
 ├── searxng/                      # SearXNG 配置
 │   └── settings.yml
-├── documents/                    # 示例企业文档
-│   ├── product_overview.md      # 产品概述
-│   ├── technical_spec.md        # 技术规格书
-│   ├── employee_handbook.txt    # 员工手册
-│   ├── meeting_notes.txt        # 会议纪要
-│   ├── sales_data.csv           # 销售数据
-│   └── project_guide.md         # 知识库搭建指南
 ├── docker-compose.yml            # 8 服务编排
 ├── .env.example
 └── README.md
@@ -182,8 +177,6 @@ curl http://localhost:8000/health
 ### 第五步：测试聊天
 
 ```bash
-# 生成环境中的示例文档已放置在 documents/ 目录
-# 需通过后台手动上传后才能被检索到
 curl -X POST http://localhost:8000/api/chat/simple \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer <你的token>" \
@@ -200,6 +193,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `POST` | `/api/auth/register` | JWT | admin | 注册员工 |
 | `GET` | `/api/auth/me` | JWT | — | 当前用户信息 |
 | `GET` | `/api/auth/users` | JWT | admin | 用户列表 |
+| `PUT` | `/api/auth/users/{id}` | JWT | admin | 编辑用户 |
 | `DELETE` | `/api/auth/users/{id}` | JWT | admin | 删除用户 |
 | `GET` | `/api/auth/preferences` | JWT | — | 获取偏好 |
 | `PUT` | `/api/auth/preferences` | JWT | — | 更新偏好 |
@@ -217,7 +211,8 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `GET` | `/api/documents/list` | JWT | admin | 文档列表 |
 | `GET` | `/api/documents/{id}` | JWT | admin | 文档详情+文本块 |
 | `GET` | `/api/documents/{id}/file` | JWT | admin | 下载原文件 |
-| `DELETE` | `/api/documents/{id}` | JWT | admin | 删除文档 |
+| `DELETE` | `/api/documents/{id}` | JWT | admin | 删除单个文档 |
+| `POST` | `/api/documents/batch-delete` | JWT | admin | 批量删除文档 |
 | `GET` | `/health` | — | — | 健康检查 |
 
 ---
