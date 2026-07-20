@@ -102,7 +102,7 @@ async def chat_stream(
                     from app.memory import generate_fact_from_message
                     llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
                     import asyncio as _a
-                    _a.run(generate_fact_from_message(llm, um, ar))
+                    return _a.run(generate_fact_from_message(llm, um, ar))
                 try:
                     fact = await loop.run_in_executor(None, _sync_fact, user_msg, reply)
                     if fact:
