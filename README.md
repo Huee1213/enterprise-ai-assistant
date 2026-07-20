@@ -26,7 +26,7 @@
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
 - **🤖 LangChain 1.0 Agent** — 基于 `create_agent()` 构建，替代手工 StateGraph + ToolNode
-- **⚡ 非阻塞流式** — `asyncio.create_task` 后台处理事实提取与摘要，不阻塞 SSE 响应
+- **⚡ 非阻塞流式** — SSE 流式在独立线程池运行（`StreamingResponse` + sync wrapper），不占用事件循环，多请求不排队
 - **🔄 智能重生成** — 重生成仅覆盖对应消息（`deleteMessagesFrom`），不新增重复；仅最后一轮可重生成
 - **🧠 LLM 事实提取** — AI 根据对话内容生成结构化用户事实，替代关键词截取
 - **🗂️ 后端分包** — `agent/`、`documents/`、`vector/` 三级包结构
@@ -149,6 +149,8 @@ LLM_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 LLM_API_BASE=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
 EMBEDDING_MODEL=local/BAAI/bge-small-en-v1.5
+# ⚠️ 必需：生成 JWT 签名密钥（否则后端容器启动失败）
+JWT_SECRET_KEY=$(openssl rand -hex 32)
 ```
 
 ### 第二步：启动所有服务
@@ -231,7 +233,6 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
 | `DELETE` | `/api/chat/conversations/{id}/messages/from/{mid}` | JWT | — | 删除该消息及之后所有消息 |
 | `GET` | `/api/chat/conversations/{id}/search?q=` | JWT | — | 搜索对话内消息 |
-| `DELETE` | `/api/chat/conversations/{id}/messages/from/{mid}` | JWT | — | 删除该消息及之后所有消息 |
 | `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |
 | `POST` | `/api/chat/conversations/{id}/messages/bulk-delete` | JWT | — | 批量删除消息 |
 | `PUT` | `/api/chat/conversations/{id}/title` | JWT | — | 更新对话标题 |
@@ -262,7 +263,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `EMBEDDING_MODEL` | `local/BAAI/bge-small-en-v1.5` | 向量化模型 |
 | `EMBEDDING_API_KEY` | — | 嵌入 API 密钥（远程模式） |
 | `LLM_PROVIDER` | `openai` | 默认 LLM 供应商 |
-| `JWT_SECRET_KEY` | **必需** | JWT 签名密钥（`openssl rand -hex 32` 生成） |
+| `JWT_SECRET_KEY` | **必需，无默认值** | JWT 签名密钥——容器启动失败如果未设置（`openssl rand -hex 32` 生成） |
 | `PASSWORD_SALT` | `enterprise-ai-password-salt-v1` | 密码哈希固定盐值 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `MILVUS_URI` | `http://milvus:19530` | Milvus 连接地址 |
