@@ -12,9 +12,9 @@ from app.models import DocumentInfo, UploadResponse, BulkUploadResponse
 
 logger = logging.getLogger(__name__)
 from app.config import settings
-from app.document_processor import processor
-from app.vector_store import add_documents, get_vector_store
-from app.document_registry import register_document, list_documents, delete_document as registry_delete
+from app.documents.processor import processor
+from app.vector.store import add_documents, get_vector_store
+from app.documents.registry import register_document, list_documents, delete_document as registry_delete
 from app.auth import require_admin, PERM_CHILDREN, get_user_by_id as auth_get_user_by_id
 from app.database import get_db
 
@@ -209,7 +209,7 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_d
 
     if not chunks:
         try:
-            from app.vector_store import similarity_search
+            from app.vector.store import similarity_search
             results = await loop.run_in_executor(None, lambda: similarity_search("document content", k=100))
             seen = set()
             for r in results:
@@ -225,7 +225,7 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_d
         try:
             file_path = _get_file_path(doc_id, doc.filename)
             if file_path and await loop.run_in_executor(None, os.path.exists, file_path):
-                from app.document_processor import processor as doc_proc
+                from app.documents.processor import processor as doc_proc
                 docs = await loop.run_in_executor(None, doc_proc.process_file, file_path, doc.filename)
                 for i, d in enumerate(docs):
                     chunks.append(ChunkInfo(index=i, content=d.page_content, source=doc.filename, doc_id=doc_id))
@@ -259,7 +259,7 @@ async def get_document_file(
 @router.delete("/{doc_id}", response_model=dict)
 async def delete_document_route(doc_id: str, admin_user: dict = Depends(_require_doc_perm("documents.delete"))):
     try:
-        from app.vector_store import delete_document as vector_delete
+        from app.vector.store import delete_document as vector_delete
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: (vector_delete(doc_id), registry_delete(doc_id)))
         return {"status": "deleted", "id": doc_id}
@@ -271,7 +271,7 @@ async def delete_document_route(doc_id: str, admin_user: dict = Depends(_require
 @router.post("/batch-delete", response_model=dict)
 async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(_require_doc_perm("documents.delete"))):
     try:
-        from app.vector_store import batch_delete_documents as vector_batch_delete
+        from app.vector.store import batch_delete_documents as vector_batch_delete
         doc_ids: list = body.get("ids", [])
         if not doc_ids:
             return {"status": "ok", "deleted": 0}
@@ -284,7 +284,7 @@ async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(_r
 
 
 def _batch_delete_all(doc_ids: list, vector_batch_delete):
-    from app.document_registry import delete_document as registry_delete
+    from app.documents.registry import delete_document as registry_delete
     vector_batch_delete(doc_ids)
     for doc_id in doc_ids:
         registry_delete(doc_id)

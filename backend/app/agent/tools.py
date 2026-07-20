@@ -4,7 +4,7 @@ from typing import List, Type
 from langchain_core.tools import BaseTool
 from langchain_core.documents import Document
 from pydantic import BaseModel, Field
-from app.vector_store import similarity_search
+from app.vector.store import similarity_search
 
 
 class KnowledgeSearchInput(BaseModel):

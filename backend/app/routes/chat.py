@@ -43,7 +43,7 @@ def _get_llm():
 
 async def _load_chat_cfg() -> dict:
     try:
-        from app.runtime_config import get_effective_config
+        from app.agent.runtime_config import get_effective_config
         return await get_effective_config()
     except Exception:
         return {}
@@ -79,10 +79,10 @@ async def chat_stream(
     await save_message(db, user_id, conv_id, "user", request.message)
 
     if request.use_agent:
-        from app.agent_graph import stream_agent
+        from app.agent.graph import stream_agent
         generator = stream_agent(request.message, conv_id, memory_ctx, history_ctx=history_ctx, user_id=user_id, db=db)
     else:
-        from app.agent_graph import stream_rag
+        from app.agent.graph import stream_rag
         generator = stream_rag(request.message, memory_ctx, history_ctx=history_ctx, db=db, user_id=user_id, conv_id=conv_id)
 
     async def _stream_and_save():
@@ -175,11 +175,11 @@ async def chat_simple(
     await save_message(db, user_id, conv_id, "user", request.message)
 
     if request.use_agent:
-        from app.agent_graph import run_agent
+        from app.agent.graph import run_agent
         result = await run_agent(request.message, memory_ctx, conversation_id=conv_id, user_id=user_id)
         answer = result["answer"]
     else:
-        from app.agent_graph import run_rag
+        from app.agent.graph import run_rag
         result = await run_rag(request.message, memory_ctx)
         answer = result["answer"]
 

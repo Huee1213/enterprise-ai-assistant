@@ -1,5 +1,5 @@
 from app.config import settings
-from app.runtime_config import get_effective_config
+from app.agent.runtime_config import get_effective_config
 from langchain_core.embeddings import Embeddings
 
 

@@ -1,10 +1,7 @@
-"""Pure LangChain/LangGraph agent with tool calling and streaming.
+"""LangChain 1.0 agent built with create_agent.
 
-Uses LangChain's component architecture:
-  - StateGraph with MessagesState
-  - ToolNode for tool execution
-  - stream_mode="messages" for LLM token streaming
-  - Simple RAG via vector_store
+Uses LangChain 1.0's create_agent() factory instead of
+manual StateGraph + ToolNode construction.
 """
 
 import json
@@ -13,31 +10,28 @@ import logging
 import time
 from typing import AsyncGenerator
 
+from langchain.agents import create_agent
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
-from langchain_core.tools import BaseTool
 from langchain_openai import ChatOpenAI
-from langgraph.graph import StateGraph, MessagesState, START, END
-from langgraph.prebuilt import ToolNode
 
 from app.config import settings
-from app.tools import get_tools
+from app.agent.tools import get_tools
 
 logger = logging.getLogger(__name__)
 
 # ── Runtime config cache ────────────────────────────────────────────────────
 _effective_config: dict = {}
 _config_loaded_at: float = 0
-_CONFIG_TTL = 30  # seconds
+_CONFIG_TTL = 30
 
 
 async def _load_effective_config() -> dict:
-    """Load effective config (env defaults + DB overrides), cached for TTL seconds."""
     global _effective_config, _config_loaded_at
     now = time.monotonic()
     if _effective_config and (now - _config_loaded_at) < _CONFIG_TTL:
         return _effective_config
     try:
-        from app.runtime_config import get_effective_config
+        from app.agent.runtime_config import get_effective_config
         _effective_config = await get_effective_config()
     except Exception:
         _effective_config = {}
@@ -45,7 +39,7 @@ async def _load_effective_config() -> dict:
     return _effective_config
 
 
-def _get_llm_cfg(cfg: dict):
+def _build_chat_model(cfg: dict):
     return ChatOpenAI(
         model=cfg.get("llm_model", settings.llm_model),
         temperature=float(cfg.get("llm_temperature", settings.llm_temperature)),
@@ -55,58 +49,39 @@ def _get_llm_cfg(cfg: dict):
     )
 
 
-def _get_llm_full_cfg(cfg: dict):
-    """LLM with reasoning extraction support."""
-    return _get_llm_cfg(cfg)
-
-
-tools: list[BaseTool] = get_tools()
-tool_node = ToolNode(tools)
-
-
-# ── Graph nodes ────────────────────────────────────────────────────────────
-
-
-async def call_model(state: MessagesState) -> dict:
-    llm_cfg = await _load_effective_config()
-    llm = _get_llm_cfg(llm_cfg).bind_tools(tools)
-    system = SystemMessage(
-        content="You are an enterprise AI knowledge assistant. "
-                "Answer questions using the knowledge base when relevant. "
-                "Always cite sources. Be concise."
+def _build_agent():
+    """Create a LangChain 1.0 agent with tools.
+    
+    System prompt is injected at invocation time so memory/context
+    can be injected dynamically per-request.
+    """
+    return create_agent(
+        model=_build_chat_model(_effective_config or {}),
+        tools=get_tools(),
+        name="enterprise_agent",
     )
-    msgs = [system] + list(state["messages"])
-    try:
-        response = await llm.ainvoke(msgs)
-    except Exception as e:
-        err = str(e)
-        logger.warning("LLM call error: %.200s", err)
-        if "ResourceExhausted" in err or "rate limit" in err.lower():
-            response = AIMessage(content="抱歉，API 请求过于频繁，请稍后再试。")
-        else:
-            response = AIMessage(content="抱歉，处理请求时出现错误，请稍后重试。")
-    return {"messages": [response]}
 
 
-def should_continue(state: MessagesState):
-    last = state["messages"][-1]
-    if hasattr(last, "tool_calls") and last.tool_calls:
-        return "tools"
-    return END
+DYNAMIC_SYSTEM = (
+    "You are an enterprise AI knowledge assistant. "
+    "Answer questions using the knowledge base when relevant. "
+    "Always cite sources. Be concise."
+)
 
 
-# ── Graph build ────────────────────────────────────────────────────────────
+def _build_messages(query: str, memory_context: str = "",
+                    history_ctx: str = "") -> list:
+    parts = [DYNAMIC_SYSTEM]
+    if memory_context:
+        parts.append(f"User context:\n{memory_context}")
+    if history_ctx:
+        parts.append(f"Recent conversation:\n{history_ctx}")
+    return [
+        {"role": "system", "content": "\n\n".join(parts)},
+        {"role": "user", "content": query},
+    ]
 
-workflow = StateGraph(MessagesState)
-workflow.add_node("agent", call_model)
-workflow.add_node("tools", tool_node)
-workflow.add_conditional_edges("agent", should_continue, {"tools": "tools", END: END})
-workflow.add_edge("tools", "agent")
-workflow.add_edge(START, "agent")
 
-agent_graph = workflow.compile()
-
-# Module-level flag: never attempt checkpointer connections
 init_checkpointer = lambda: None
 close_checkpointer = lambda: None
 
@@ -115,7 +90,6 @@ close_checkpointer = lambda: None
 
 
 def _emit_reasoning(chunk) -> str:
-    """Extract and return reasoning content from an LLM chunk if present."""
     if hasattr(chunk, "content_blocks"):
         for block in chunk.content_blocks:
             if isinstance(block, dict) and block.get("type") == "reasoning":
@@ -126,13 +100,16 @@ def _emit_reasoning(chunk) -> str:
     return getattr(chunk, "reasoning_content", "") or ""
 
 
+# ── RAG streaming (no tool loop) ───────────────────────────────────────────
+
+
 async def stream_rag(query: str, memory_context: str = "",
                      history_ctx: str = "", db=None, user_id: str = "",
                      conv_id: str = "") -> AsyncGenerator[str, None]:
     try:
         cfg = await _load_effective_config()
-        from app.vector_store import similarity_search
-        temp_llm = _get_llm_full_cfg(cfg)
+        from app.vector.store import similarity_search
+        llm = _build_chat_model(cfg)
         loop = asyncio.get_running_loop()
         docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
         context = "\n\n".join(
@@ -149,7 +126,7 @@ async def stream_rag(query: str, memory_context: str = "",
         sys = f"You are an enterprise knowledge assistant.\n\nUser context:\n{memory_context}{history_block}\n\nAnswer based on the context below.\nContext:\n{context}"
 
         full_answer = ""
-        async for chunk in temp_llm.astream([SystemMessage(content=sys), HumanMessage(content=query)]):
+        async for chunk in llm.astream([SystemMessage(content=sys), HumanMessage(content=query)]):
             reasoning = _emit_reasoning(chunk)
             if reasoning:
                 yield f"data: {json.dumps({'event': 'reasoning', 'data': reasoning})}\n\n"
@@ -180,53 +157,63 @@ async def stream_rag(query: str, memory_context: str = "",
         yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
 
 
-async def stream_agent(query: str, conv_id: str, memory_context: str = "",
-                       history_ctx: str = "", user_id: str = "", db=None) -> AsyncGenerator[str, None]:
-    msgs = [SystemMessage(content="You are an enterprise AI knowledge assistant.")]
-    if memory_context:
-        msgs.append(SystemMessage(content=f"User context:\n{memory_context}"))
-    if history_ctx:
-        msgs.append(SystemMessage(content=f"Recent conversation:\n{history_ctx}"))
-    msgs.append(HumanMessage(content=query))
+# ── Agent streaming (with tool loop via create_agent) ──────────────────────
 
-    input_state = {"messages": msgs}
+
+async def stream_agent(query: str, conv_id: str, memory_context: str = "",
+                       history_ctx: str = "", user_id: str = "",
+                       db=None) -> AsyncGenerator[str, None]:
+    cfg = await _load_effective_config()
+    llm = _build_chat_model(cfg)
+    agent = create_agent(
+        model=llm,
+        tools=get_tools(),
+        name="enterprise_agent",
+    )
+
+    messages = _build_messages(query, memory_context, history_ctx)
 
     try:
         step_num = 0
-        async for update in agent_graph.astream(input_state, stream_mode="updates"):
-            for node_name, state in update.items():
-                if node_name == "agent":
-                    last_msg = state["messages"][-1] if state.get("messages") else None
-                    if not last_msg:
-                        continue
-                    if isinstance(last_msg, AIMessage):
-                        if last_msg.tool_calls:
-                            for tc in last_msg.tool_calls:
-                                step_num += 1
-                                step_data = {
-                                    "step": step_num,
-                                    "action": "llm_call",
-                                    "input": str(tc.get("args", {})),
-                                    "output": f"Calling {tc.get('name', 'unknown')}...",
-                                    "duration_ms": 0,
-                                }
-                                yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
-                        if last_msg.content:
-                            for i in range(0, len(last_msg.content), 3):
-                                yield f"data: {json.dumps({'event': 'token', 'data': last_msg.content[i:i+3]})}\n\n"
-                                await asyncio.sleep(0.003)
-                elif node_name == "tools":
-                    for tool_msg in state.get("messages", []):
-                        if hasattr(tool_msg, "content") and tool_msg.content:
+        async for chunk in agent.astream(
+            {"messages": messages},
+            stream_mode=["messages", "updates"],
+            version="v2",
+        ):
+            if chunk["type"] == "messages":
+                msg, metadata = chunk["data"]
+                if isinstance(msg, AIMessage):
+                    if msg.tool_calls:
+                        for tc in msg.tool_calls:
                             step_num += 1
                             step_data = {
                                 "step": step_num,
-                                "action": "tool_execution",
-                                "input": "",
-                                "output": str(tool_msg.content)[:200],
+                                "action": "llm_call",
+                                "input": str(tc.get("args", {})),
+                                "output": f"Calling {tc.get('name', 'unknown')}...",
                                 "duration_ms": 0,
                             }
                             yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
+                    # Streaming tokens — incremental content only, no full-text re-emission
+                    if hasattr(msg, "text") and msg.text:
+                        yield f"data: {json.dumps({'event': 'token', 'data': msg.text})}\n\n"
+                    elif isinstance(msg.content, str) and msg.content:
+                        yield f"data: {json.dumps({'event': 'token', 'data': msg.content})}\n\n"
+            elif chunk["type"] == "updates":
+                for source, update in chunk["data"].items():
+                    # Only emit step/tool events from updates, NOT content
+                    if source == "tools":
+                        for tool_msg in update.get("messages", []):
+                            if hasattr(tool_msg, "content") and tool_msg.content:
+                                step_num += 1
+                                step_data = {
+                                    "step": step_num,
+                                    "action": "tool_execution",
+                                    "input": "",
+                                    "output": str(tool_msg.content)[:200],
+                                    "duration_ms": 0,
+                                }
+                                yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
     except (GeneratorExit, asyncio.CancelledError):
         return
     except Exception as e:
@@ -237,17 +224,20 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
     yield f"data: {json.dumps({'event': 'done', 'data': conv_id})}\n\n"
 
 
+# ── Non-streaming variants ─────────────────────────────────────────────────
+
+
 async def run_rag(query: str, memory_context: str = "") -> dict:
     cfg = await _load_effective_config()
-    from app.vector_store import similarity_search
-    temp_llm = _get_llm_cfg(cfg)
+    llm = _build_chat_model(cfg)
+    from app.vector.store import similarity_search
     loop = asyncio.get_running_loop()
     docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
     context = "\n\n".join(
         f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
     ) if docs else "No relevant documents found."
     sys = f"You are an enterprise knowledge assistant.\n\nUser context:\n{memory_context}\n\nAnswer based on context:\n{context}"
-    response = await temp_llm.ainvoke([SystemMessage(content=sys), HumanMessage(content=query)])
+    response = await llm.ainvoke([SystemMessage(content=sys), HumanMessage(content=query)])
     return {
         "answer": response.content,
         "sources": [
@@ -257,13 +247,17 @@ async def run_rag(query: str, memory_context: str = "") -> dict:
     }
 
 
-async def run_agent(query: str, memory_context: str = "", history_ctx: str = "", conversation_id: str = "", user_id: str = "") -> dict:
-    msgs = [SystemMessage(content="You are an enterprise AI knowledge assistant.")]
-    if memory_context:
-        msgs.append(SystemMessage(content=f"User context:\n{memory_context}"))
-    if history_ctx:
-        msgs.append(SystemMessage(content=f"Recent conversation:\n{history_ctx}"))
-    msgs.append(HumanMessage(content=query))
-    result = await agent_graph.ainvoke({"messages": msgs})
+async def run_agent(query: str, memory_context: str = "", history_ctx: str = "",
+                    conversation_id: str = "", user_id: str = "") -> dict:
+    cfg = await _load_effective_config()
+    llm = _build_chat_model(cfg)
+    agent = create_agent(
+        model=llm,
+        tools=get_tools(),
+        name="enterprise_agent",
+    )
+
+    messages = _build_messages(query, memory_context, history_ctx)
+    result = await agent.ainvoke({"messages": messages})
     answer = result["messages"][-1].content if isinstance(result["messages"][-1], AIMessage) else str(result["messages"][-1])
     return {"conversation_id": conversation_id, "answer": answer, "steps": []}

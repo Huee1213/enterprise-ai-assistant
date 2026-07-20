@@ -180,7 +180,7 @@ export const useChatStore = defineStore('chat', () => {
     // Delete backend messages from this point onward to avoid duplicates
     const msgToDelete = conv.messages[idx]
     if (msgToDelete.backendId) {
-      try { await deleteMessagesFrom(conv.id, msgToDelete.backendId) } catch { /* ignore */ }
+      try { await deleteMessagesFrom(conv.id, msgToDelete.backendId) } catch (e) { console.error('deleteMessagesFrom failed:', e) }
     }
     conv.messages.splice(idx)
     conv.updatedAt = new Date()

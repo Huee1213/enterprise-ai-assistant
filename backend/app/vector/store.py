@@ -3,7 +3,7 @@ from typing import List, Optional
 from langchain_milvus import Milvus
 from langchain_core.documents import Document
 from app.config import settings
-from app.embeddings import get_embeddings
+from app.vector.embeddings import get_embeddings
 
 logger = logging.getLogger("vector_store")
 

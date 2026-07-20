@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db, engine
 from app.auth import init_admin
-import app.agent_graph
+import app.agent.graph
 from app.routes.health import router as health_router
 from app.routes.chat import router as chat_router
 from app.routes.documents import router as documents_router
@@ -22,8 +22,8 @@ async def _reindex_registry():
 
     entries = await loop.run_in_executor(None, _load_registry, registry_path)
 
-    from app.document_processor import processor
-    from app.vector_store import add_documents
+    from app.documents.processor import processor
+    from app.vector.store import add_documents
     for entry in entries:
         doc_id = entry.get("id")
         filename = entry.get("filename")

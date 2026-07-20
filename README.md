@@ -63,13 +63,19 @@ enterprise-ai-assistant/
 │   │   ├── auth.py              # JWT 认证、Redis 令牌管理
 │   │   ├── redis_client.py      # Redis 连接、Token CRUD、在线状态
 │   │   ├── memory.py            # 长短期记忆系统（SQLAlchemy ORM）
-│   │   ├── embeddings.py        # 向量化（FastEmbed 本地）
-│   │   ├── vector_store.py      # Milvus 向量存储
-│   │   ├── document_processor.py # 文件解析与分块
-│   │   ├── document_registry.py # 文档元数据 + 文本块存储
-│   │   ├── tools.py             # LangChain 工具（知识/网页/时间/摘要）
-│   │   ├── runtime_config.py    # 运行时配置（env + DB 覆盖/Agent 生效）
-│   │   ├── agent_graph.py       # LangGraph 状态机 + Agent
+│   │   ├── agent/               # Agent 系统
+│   │   │   ├── __init__.py
+│   │   │   ├── graph.py          # LangGraph 状态机 + Agent
+│   │   │   ├── tools.py          # LangChain 工具（知识/网页/时间/摘要）
+│   │   │   └── runtime_config.py # 运行时配置（env + DB 覆盖/Agent 生效）
+│   │   ├── documents/           # 文档处理
+│   │   │   ├── __init__.py
+│   │   │   ├── processor.py     # 文件解析与分块
+│   │   │   └── registry.py      # 文档元数据 + 文本块存储
+│   │   ├── vector/              # 向量存储
+│   │   │   ├── __init__.py
+│   │   │   ├── embeddings.py    # 向量化（FastEmbed 本地）
+│   │   │   └── store.py         # Milvus 向量存储
 │   │   └── routes/
 │   │       ├── auth.py          # 登录/注册/用户管理
 │   │       ├── chat.py          # 流式/简单聊天 + 对话历史
