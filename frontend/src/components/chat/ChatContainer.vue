@@ -14,17 +14,16 @@ const confirmDeleteMsgId = ref<string | null>(null)
 const confirmDeleteMsgContent = ref('')
 const msgContainerRef = ref<HTMLDivElement | null>(null)
 const msgRefs = ref<Map<string, HTMLElement>>(new Map())
+const scrollContainerRef = ref<HTMLDivElement | null>(null)
 
 // Message search
 const showSearch = ref(false)
 const searchQuery = ref('')
-const searchMatches = ref<number[]>([])
 const currentMatchIdx = ref(-1)
 
-function setMsgRef(id: string, el: HTMLElement | null) {
-  if (el) msgRefs.value.set(id, el)
-  else msgRefs.value.delete(id)
-}
+// Scroll tracking for position indicator
+const scrollProgress = ref(0)
+const visibleMsgIndex = ref(0)
 
 const filteredMatchIndices = computed(() => {
   if (!searchQuery.value.trim()) return []
@@ -34,6 +33,63 @@ const filteredMatchIndices = computed(() => {
     .filter(({ msg }) => msg.content.toLowerCase().includes(q))
     .map(({ idx }) => idx)
 })
+
+// Messages to show as dots: only user messages (each user message = one conversation turn)
+const dotMessages = computed(() =>
+  chat.messages.filter(m => m.role === 'user')
+)
+
+function scrollToMsg(msgId: string) {
+  const el = msgRefs.value.get(msgId)
+  if (el) {
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+}
+
+function onScroll() {
+  const el = scrollContainerRef.value
+  if (!el || chat.messages.length === 0) return
+  const { scrollTop, scrollHeight, clientHeight } = el
+  scrollProgress.value = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
+
+  // Determine which message is most visible
+  const containerRect = el.getBoundingClientRect()
+  const midY = containerRect.top + containerRect.height / 2
+  let bestIdx = 0
+  let bestDist = Infinity
+  for (const [id, msgEl] of msgRefs.value.entries()) {
+    const rect = msgEl.getBoundingClientRect()
+    const dist = Math.abs(rect.top + rect.height / 2 - midY)
+    if (dist < bestDist) {
+      bestDist = dist
+      bestIdx = chat.messages.findIndex(m => m.id === id)
+    }
+  }
+  visibleMsgIndex.value = bestIdx
+}
+
+function setMsgRef(id: string, el: HTMLElement | null) {
+  if (el) msgRefs.value.set(id, el)
+  else msgRefs.value.delete(id)
+}
+
+const dotIndices = computed(() => {
+  const msgs = chat.messages
+  const dots = dotMessages.value
+  const total = msgs.length
+  if (total === 0) return []
+  return dots.map(m => ({
+    msg: m,
+    idx: msgs.indexOf(m),
+    label: m.content.slice(0, 40) + (m.content.length > 40 ? '...' : ''),
+    pct: total > 1 ? (msgs.indexOf(m) / (total - 1)) * 100 : 50,
+  }))
+})
+
+function handleDotClick(msgId: string) {
+  const el = msgRefs.value.get(msgId)
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+}
 
 function toggleSearch() {
   showSearch.value = !showSearch.value
@@ -185,7 +241,7 @@ defineExpose({ toggleSearch })
       </button>
     </div>
 
-    <div ref="msgContainerRef" class="flex-1 overflow-y-auto px-4 py-6 min-h-0">
+    <div ref="scrollContainerRef" @scroll="onScroll" class="flex-1 overflow-y-auto px-4 py-6 min-h-0">
       <div class="max-w-4xl mx-auto space-y-6">
         <template v-if="chat.messages.length === 0">
           <div class="flex flex-col items-center justify-center min-h-[300px] py-16 text-center">
@@ -226,19 +282,31 @@ defineExpose({ toggleSearch })
       </div>
     </div>
 
-    <!-- Right-side match position indicator -->
-    <div v-if="showSearch && searchQuery.trim()" class="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-0.5">
-      <div class="bg-card border border-border rounded-lg py-2 px-1 shadow-md flex flex-col items-center gap-1 max-h-[300px] overflow-y-auto scrollbar-none">
+    <!-- Right-side message navigation dots (DeepSeek-style) -->
+    <div v-if="dotIndices.length >= 2" class="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center">
+      <div class="relative flex flex-col items-center gap-0 py-1">
         <div
-          v-for="(matchIdx, mi) in filteredMatchIndices"
-          :key="matchIdx"
-          @click="currentMatchIdx = mi; jumpToMatch('next')"
-          class="w-2 h-2 rounded-full cursor-pointer transition-all shrink-0"
-          :class="mi === currentMatchIdx ? 'bg-primary scale-125 shadow-sm shadow-primary/30' : 'bg-muted-foreground/30 hover:bg-muted-foreground/60'"
-          :title="`跳转到第 ${matchIdx + 1} 条消息`"
-        />
+          v-for="(dot, di) in dotIndices"
+          :key="dot.msg.id"
+          @click="handleDotClick(dot.msg.id)"
+          class="group relative flex items-center justify-center cursor-pointer py-0.5"
+          :title="dot.label"
+        >
+          <div
+            class="rounded-full transition-all duration-200"
+            :class="visibleMsgIndex >= dot.idx && (di === dotIndices.length - 1 || visibleMsgIndex < (dotIndices[di + 1]?.idx ?? Infinity))
+              ? 'w-2 h-2 bg-primary shadow-sm shadow-primary/30'
+              : 'w-1.5 h-1.5 bg-muted-foreground/25 hover:bg-muted-foreground/50'"
+          />
+          <!-- Tooltip -->
+          <div class="absolute right-full mr-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center pointer-events-none">
+            <div class="bg-popover text-popover-foreground text-[11px] rounded-md px-2.5 py-1.5 shadow-lg border border-border whitespace-nowrap max-w-[220px] truncate leading-relaxed">
+              {{ dot.label }}
+            </div>
+            <div class="w-0 h-0 border-l-4 border-l-popover border-y-4 border-y-transparent" />
+          </div>
+        </div>
       </div>
-      <span class="text-[10px] text-muted-foreground tabular-nums mt-1">{{ filteredMatchIndices.length }}</span>
     </div>
 
     <ChatInput :disabled="chat.isStreaming" :isStreaming="chat.isStreaming" @send="handleSend" @stop="chat.stopStreaming" />
