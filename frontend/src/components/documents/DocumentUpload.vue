@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue'
 import { uploadDocument, uploadDocumentsBulk } from '@/api/documents'
+import { useAuthStore } from '@/stores/auth'
+const auth = useAuthStore()
 
 const emit = defineEmits<{
   uploaded: []
@@ -82,7 +84,7 @@ async function handleFiles(files: File[]) {
 
 <template>
   <div>
-    <div
+    <div v-if="auth.hasPermission('documents.upload')"
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"
@@ -109,5 +111,9 @@ async function handleFiles(files: File[]) {
     </div>
 
     <p v-if="error" class="mt-2 text-sm text-destructive">{{ error }}</p>
+    <div v-else-if="!auth.hasPermission('documents.upload')" class="rounded-xl border-2 border-dashed border-border p-8 text-center">
+      <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mx-auto mb-2 text-muted-foreground/40"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <p class="text-sm text-muted-foreground">没有上传权限</p>
+    </div>
   </div>
 </template>

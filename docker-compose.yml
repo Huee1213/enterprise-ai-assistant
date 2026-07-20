@@ -97,6 +97,7 @@ services:
       - UPLOAD_DIR=/app/data/documents
       - SEARXNG_URL=http://searxng:8080
       - DB_URL=postgresql+asyncpg://app:app123@postgres:5432/enterprise_ai
+      - REDIS_URL=redis://redis:6379/0
     volumes:
       - app_data:/app/data
     depends_on:
@@ -105,6 +106,8 @@ services:
       postgres:
         condition: service_healthy
       searxng:
+        condition: service_started
+      redis:
         condition: service_started
     restart: unless-stopped
     networks:

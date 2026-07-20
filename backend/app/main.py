@@ -3,6 +3,7 @@ import os
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from app.config import settings
 from app.database import init_db, engine
 from app.auth import init_admin
@@ -43,10 +44,12 @@ async def _reindex_registry():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    from app.redis_client import close_redis
     await init_db()
     await init_admin()
     await _reindex_registry()
     yield
+    await close_redis()
     await engine.dispose()
 
 
@@ -69,6 +72,11 @@ app.include_router(health_router)
 app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(documents_router)
+
+import os
+avatar_dir = os.path.join(os.path.dirname(__file__), "..", "data", "avatars")
+os.makedirs(avatar_dir, exist_ok=True)
+app.mount("/api/files/avatars", StaticFiles(directory=avatar_dir), name="avatars")
 
 
 @app.get("/")

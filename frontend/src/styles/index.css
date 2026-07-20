@@ -65,13 +65,14 @@
 .markdown-content h1 { @apply text-2xl font-bold mt-6 mb-3; }
 .markdown-content h2 { @apply text-xl font-bold mt-5 mb-2; }
 .markdown-content h3 { @apply text-lg font-semibold mt-4 mb-2; }
-.markdown-content p { @apply mb-3 leading-relaxed; }
+.markdown-content p { @apply leading-relaxed; margin: 0; width: fit-content; }
 .markdown-content ul { @apply list-disc pl-6 mb-3 space-y-1; }
 .markdown-content ol { @apply list-decimal pl-6 mb-3 space-y-1; }
 .markdown-content li { @apply leading-relaxed; }
-.markdown-content code { @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono; }
-.markdown-content pre { @apply bg-muted p-4 rounded-lg mb-4 overflow-x-auto; }
-.markdown-content pre code { @apply bg-transparent p-0; }
+.markdown-content code:not(.code-block code) { @apply bg-muted px-1.5 py-0.5 rounded text-sm font-mono; }
+.markdown-content pre:not(.code-block pre) { @apply bg-muted p-4 rounded-lg mb-4 overflow-x-auto; }
+.markdown-content .code-block pre { @apply bg-card p-3 m-0 overflow-x-auto; }
+.markdown-content .code-block pre code { @apply bg-transparent p-0 text-xs leading-relaxed; }
 .markdown-content blockquote { @apply border-l-4 border-primary/30 pl-4 italic text-muted-foreground mb-3; }
 .markdown-content a { @apply text-primary underline underline-offset-2 hover:text-primary/80; }
 .markdown-content table { @apply w-full border-collapse mb-4; }
@@ -110,4 +111,6 @@
 .conv-switch-leave-active { transition: all 80ms ease-in; }
 .conv-switch-enter-from { opacity: 0; }
 .conv-switch-leave-to { opacity: 0; }
+
+/* Markdown chat bubble styling */
 

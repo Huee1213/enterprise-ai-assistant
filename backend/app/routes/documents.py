@@ -4,13 +4,38 @@ import shutil
 from datetime import datetime
 from typing import List
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from app.models import DocumentInfo, UploadResponse, BulkUploadResponse
 from app.config import settings
 from app.document_processor import processor
 from app.vector_store import add_documents, get_vector_store
 from app.document_registry import register_document, list_documents, delete_document as registry_delete
-from app.auth import require_admin
+from app.auth import require_admin, PERM_CHILDREN, get_user_by_id as auth_get_user_by_id
+from app.database import get_db
+
+
+def _has_perm(user: dict, perm: str) -> bool:
+    if user.get("is_super_admin", False):
+        return True
+    perms = user.get("permissions", [])
+    if perm in perms:
+        return True
+    for parent, children in PERM_CHILDREN.items():
+        if perm in children and parent in perms:
+            return True
+    return False
+
+
+def _require_doc_perm(perm: str):
+    async def _check(admin_user: dict = Depends(require_admin), db: AsyncSession = Depends(get_db)):
+        user = await auth_get_user_by_id(db, admin_user["user_id"])
+        if not user:
+            raise HTTPException(status_code=401, detail="用户不存在")
+        if not _has_perm(user, perm):
+            raise HTTPException(status_code=403, detail="无权执行此操作")
+        return user
+    return _check
 
 router = APIRouter(prefix="/api/documents", tags=["Documents"])
 
@@ -49,7 +74,7 @@ def _read_original_content(doc_id: str, filename: str) -> str:
 
 
 @router.post("/upload", response_model=UploadResponse)
-async def upload_document(file: UploadFile = File(...), admin_user: dict = Depends(require_admin)):
+async def upload_document(file: UploadFile = File(...), admin_user: dict = Depends(_require_doc_perm("documents.upload"))):
     ext = os.path.splitext(file.filename or "unknown")[1].lower()
     if ext not in processor.SUPPORTED_EXTENSIONS:
         raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}。支持的类型: {processor.SUPPORTED_EXTENSIONS}")
@@ -117,7 +142,7 @@ async def _process_and_register(file: UploadFile) -> UploadResponse:
 
 
 @router.post("/upload-bulk", response_model=BulkUploadResponse)
-async def upload_documents_bulk(files: List[UploadFile] = File(...), admin_user: dict = Depends(require_admin)):
+async def upload_documents_bulk(files: List[UploadFile] = File(...), admin_user: dict = Depends(_require_doc_perm("documents.upload"))):
     results = []
     for f in files:
         r = await _process_and_register(f)
@@ -128,7 +153,7 @@ async def upload_documents_bulk(files: List[UploadFile] = File(...), admin_user:
 
 
 @router.get("/list", response_model=List[DocumentInfo])
-async def list_documents_route(admin_user: dict = Depends(require_admin)):
+async def list_documents_route(admin_user: dict = Depends(_require_doc_perm("documents.view"))):
     try:
         return list_documents()
     except Exception as e:
@@ -136,7 +161,7 @@ async def list_documents_route(admin_user: dict = Depends(require_admin)):
 
 
 @router.get("/{doc_id}", response_model=DocDetailResponse)
-async def get_document_detail(doc_id: str, admin_user: dict = Depends(require_admin)):
+async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_doc_perm("documents.view"))):
     docs = list_documents()
     doc = next((d for d in docs if d.id == doc_id), None)
     if not doc:
@@ -197,7 +222,7 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(require_ad
 async def get_document_file(
     doc_id: str,
     token: str = None,
-    admin_user: dict = Depends(require_admin),
+    admin_user: dict = Depends(_require_doc_perm("documents.download")),
 ):
     docs = list_documents()
     doc = next((d for d in docs if d.id == doc_id), None)
@@ -211,7 +236,7 @@ async def get_document_file(
 
 
 @router.delete("/{doc_id}", response_model=dict)
-async def delete_document_route(doc_id: str, admin_user: dict = Depends(require_admin)):
+async def delete_document_route(doc_id: str, admin_user: dict = Depends(_require_doc_perm("documents.delete"))):
     try:
         from app.vector_store import delete_document as vector_delete
         vector_delete(doc_id)
@@ -222,7 +247,7 @@ async def delete_document_route(doc_id: str, admin_user: dict = Depends(require_
 
 
 @router.post("/batch-delete", response_model=dict)
-async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(require_admin)):
+async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(_require_doc_perm("documents.delete"))):
     try:
         from app.vector_store import batch_delete_documents as vector_batch_delete
         doc_ids: list = body.get("ids", [])

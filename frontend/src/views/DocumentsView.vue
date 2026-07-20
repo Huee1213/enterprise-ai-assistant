@@ -7,6 +7,8 @@ import apiClient from '@/api/client'
 import DocumentUpload from '@/components/documents/DocumentUpload.vue'
 import DocumentList from '@/components/documents/DocumentList.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+const auth = useAuthStore()
 
 const documentListRef = ref<InstanceType<typeof DocumentList> | null>(null)
 const stats = ref({ total_docs: 0, total_chunks: 0 })
@@ -127,13 +129,19 @@ async function downloadFile() {
         </div>
       </div>
 
-      <div class="rounded-xl border border-border bg-card p-4 md:p-6">
+      <div v-if="auth.hasPermission('documents.upload')" class="rounded-xl border border-border bg-card p-4 md:p-6">
         <h2 class="text-sm font-semibold mb-4">上传文档</h2>
         <DocumentUpload @uploaded="onUploaded" />
       </div>
 
-      <div class="rounded-xl border border-border bg-card p-4 md:p-6">
+      <div v-if="auth.hasPermission('documents.view')" class="rounded-xl border border-border bg-card p-4 md:p-6">
         <DocumentList ref="documentListRef" @view-detail="viewDetail" @deleted="refreshStats" />
+      </div>
+
+      <div v-if="!auth.hasPermission('documents.upload') && !auth.hasPermission('documents.view')" class="rounded-xl border border-border bg-card p-8 text-center">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="mx-auto mb-3 text-muted-foreground/40"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
+        <p class="text-sm text-muted-foreground">你没有知识库的相关权限</p>
+        <p class="text-xs text-muted-foreground/50 mt-1">请联系系统管理员获取权限</p>
       </div>
 
       <Teleport to="body">
@@ -144,7 +152,7 @@ async function downloadFile() {
                 <h2 class="text-sm font-semibold truncate">{{ detailDoc.filename }}</h2>
                 <p class="text-[11px] text-muted-foreground mt-0.5">
                   {{ (detailDoc.size / 1024).toFixed(1) }} KB · {{ detailDoc.chunk_count }} 个文本块 · {{ detailDoc.content_type?.toUpperCase() }}
-                  <button @click="downloadFile" class="ml-2 text-primary hover:underline text-[10px]">[下载原文件]</button>
+                  <button v-if="auth.hasPermission('documents.download')" @click="downloadFile" class="ml-2 text-primary hover:underline text-[10px]">[下载原文件]</button>
                 </p>
               </div>
               <button @click="closeDetail" class="shrink-0 rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors" title="关闭">
@@ -169,8 +177,8 @@ async function downloadFile() {
                 <div v-else-if="isPdf" class="flex flex-col items-center">
                   <div v-if="loadingPdf" class="py-12 text-sm text-muted-foreground">加载 PDF 中...</div>
                   <iframe v-else-if="pdfBlobUrl" :src="pdfBlobUrl" class="w-full h-[60vh] rounded-lg border border-border" />
-                  <div v-else class="py-12 text-sm text-muted-foreground">PDF 无法预览 · <button @click="downloadFile" class="text-primary hover:underline">下载文件</button></div>
-                  <p class="text-xs text-muted-foreground mt-2">PDF 内联预览 · <button @click="downloadFile" class="text-primary hover:underline">下载原文件</button></p>
+                  <div v-else class="py-12 text-sm text-muted-foreground">PDF 无法预览 · <button v-if="auth.hasPermission('documents.download')" @click="downloadFile" class="text-primary hover:underline">下载文件</button></div>
+                  <p class="text-xs text-muted-foreground mt-2">PDF 内联预览 · <button v-if="auth.hasPermission('documents.download')" @click="downloadFile" class="text-primary hover:underline">下载原文件</button></p>
                 </div>
 
                 <!-- CSV: table -->
@@ -187,7 +195,7 @@ async function downloadFile() {
                       </tr>
                     </tbody>
                   </table>
-                  <p class="text-xs text-muted-foreground mt-2">{{ csvRows.length }} 行数据 · <button @click="downloadFile" class="text-primary hover:underline">下载原文件</button></p>
+                  <p class="text-xs text-muted-foreground mt-2">{{ csvRows.length }} 行数据 · <button v-if="auth.hasPermission('documents.download')" @click="downloadFile" class="text-primary hover:underline">下载原文件</button></p>
                 </div>
 
                 <!-- DOCX: mammoth HTML preview -->
@@ -197,7 +205,7 @@ async function downloadFile() {
                   <div v-else class="rounded-lg bg-muted/20 border border-border p-4 text-center">
                     <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground mx-auto mb-2"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/></svg>
                     <p class="text-sm font-medium mb-1">DOCX 文件</p>
-                    <button @click="downloadFile" class="rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-xs hover:bg-primary/90 transition-colors">下载原文件</button>
+                    <button v-if="auth.hasPermission('documents.download')" @click="downloadFile" class="rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-xs hover:bg-primary/90 transition-colors">下载原文件</button>
                   </div>
                 </div>
 

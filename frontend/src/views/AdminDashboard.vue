@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useAuthStore } from '@/stores/auth'
 import { useHealthStore } from '@/stores/health'
 import apiClient from '@/api/client'
@@ -7,10 +7,24 @@ import apiClient from '@/api/client'
 const auth = useAuthStore()
 const health = useHealthStore()
 
-const stats = ref({ total_docs: 0, total_chunks: 0, total_users: 0 })
+const stats = ref({ total_docs: 0, total_chunks: 0, total_users: 0, employees: 0, employees_online: 0, admins: 0, admins_online: 0 })
 const loading = ref(true)
 const editInterval = ref(false)
 const newInterval = ref(health.refreshSeconds)
+let refreshTimer: ReturnType<typeof setInterval> | null = null
+
+async function fetchUserStats() {
+  if (!auth.hasPermission('users.view')) return
+  try {
+    const { data } = await apiClient.get('/auth/users')
+    const users: any[] = data
+    stats.value.total_users = users.length
+    stats.value.employees = users.filter((u: any) => u.role === 'employee').length
+    stats.value.employees_online = users.filter((u: any) => u.role === 'employee' && u.is_online).length
+    stats.value.admins = users.filter((u: any) => u.role === 'admin' || u.role === 'super_admin').length
+    stats.value.admins_online = users.filter((u: any) => (u.role === 'admin' || u.role === 'super_admin') && u.is_online).length
+  } catch {}
+}
 
 function fmtUptime(seconds: number): string {
   if (!seconds) return '—'
@@ -34,20 +48,39 @@ onMounted(async () => {
     await health.fetch()
   }
   try {
-    const [docRes, userRes] = await Promise.allSettled([
-      apiClient.get('/documents/list'),
-      apiClient.get('/auth/users'),
-    ])
-    if (docRes.status === 'fulfilled') {
-      const docs = docRes.value.data
-      stats.value.total_docs = docs.length
-      stats.value.total_chunks = docs.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
+    const promises: Promise<any>[] = []
+    if (auth.hasPermission('documents.view')) promises.push(apiClient.get('/documents/list'))
+    if (auth.hasPermission('users.view')) promises.push(apiClient.get('/auth/users'))
+    const results = await Promise.allSettled(promises)
+    let idx = 0
+    if (auth.hasPermission('documents.view')) {
+      const r = results[idx++]
+      if (r.status === 'fulfilled') {
+        const docs = r.value.data
+        stats.value.total_docs = docs.length
+        stats.value.total_chunks = docs.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
+      }
     }
-    if (userRes.status === 'fulfilled') {
-      stats.value.total_users = userRes.value.data.length
+    if (auth.hasPermission('users.view')) {
+      const r = results[idx++]
+      if (r.status === 'fulfilled') {
+        const users: any[] = r.value.data
+        stats.value.total_users = users.length
+        stats.value.employees = users.filter((u: any) => u.role === 'employee').length
+        stats.value.employees_online = users.filter((u: any) => u.role === 'employee' && u.is_online).length
+        stats.value.admins = users.filter((u: any) => u.role === 'admin' || u.role === 'super_admin').length
+        stats.value.admins_online = users.filter((u: any) => (u.role === 'admin' || u.role === 'super_admin') && u.is_online).length
+      }
     }
   } catch {}
   loading.value = false
+  if (auth.hasPermission('users.view')) {
+    refreshTimer = setInterval(fetchUserStats, 30000)
+  }
+})
+
+onUnmounted(() => {
+  if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null }
 })
 </script>
 
@@ -58,7 +91,12 @@ onMounted(async () => {
       <p class="text-sm text-muted-foreground mt-0.5">系统运行状态与统计数据</p>
     </div>
 
-    <div v-if="loading" class="text-sm text-muted-foreground py-8 text-center">加载中...</div>
+    <div v-if="loading" class="space-y-4 animate-pulse">
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div v-for="i in 3" :key="i" class="rounded-xl border border-border bg-card p-5"><div class="flex items-center gap-3"><div class="w-9 h-9 rounded-lg bg-muted" /><div class="space-y-2"><div class="h-3 bg-muted rounded w-16" /><div class="h-7 bg-muted rounded w-12" /></div></div><div class="mt-3 h-3 bg-muted/50 rounded w-24" /></div>
+      </div>
+      <div class="rounded-xl border border-border bg-card p-5"><div class="space-y-3"><div class="h-4 bg-muted rounded w-32" /><div v-for="i in 4" :key="i" class="h-10 bg-muted/50 rounded-lg flex items-center px-3"><div class="h-3 bg-muted rounded w-20" /></div></div></div>
+    </div>
 
     <template v-else>
       <!-- Stats cards -->
@@ -86,7 +124,10 @@ onMounted(async () => {
               <p class="text-2xl font-bold">{{ stats.total_users }}</p>
             </div>
           </div>
-          <p class="text-[10px] text-muted-foreground">{{ stats.total_users > 0 ? '管理员 + 员工' : '暂无用户' }}</p>
+          <div class="space-y-1 text-[10px] text-muted-foreground">
+            <div class="flex items-center justify-between"><span>👤 员工</span><span><span class="text-green-600 dark:text-green-400 font-medium">{{ stats.employees_online }}</span><span class="text-muted-foreground/50">/{{ stats.employees }} 在线</span></span></div>
+            <div class="flex items-center justify-between"><span>🔑 管理员</span><span><span class="text-green-600 dark:text-green-400 font-medium">{{ stats.admins_online }}</span><span class="text-muted-foreground/50">/{{ stats.admins }} 在线</span></span></div>
+          </div>
         </div>
 
         <div class="rounded-xl border border-border bg-card p-5 animate-scale-in" style="animation-delay: 0.1s">

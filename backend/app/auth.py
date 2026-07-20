@@ -5,7 +5,7 @@ from typing import Optional
 from pydantic import BaseModel
 from fastapi import HTTPException, Security, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials as AuthorizationCredentials
-from sqlalchemy import select
+from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, UserModel, AsyncSessionLocal
 
@@ -15,6 +15,76 @@ ACCESS_TOKEN_EXPIRE_HOURS = 24
 
 security = HTTPBearer(auto_error=False)
 
+# Permission blocks
+PERM_DASHBOARD = "dashboard.view"
+PERM_USER_VIEW = "users.view"
+PERM_USER_CREATE = "users.create"
+PERM_USER_EDIT = "users.edit"
+PERM_USER_DELETE = "users.delete"
+PERM_USER_IMPORT = "users.import"
+PERM_USER_VIEW_DATA = "users.view_data"
+
+PERM_DOC_VIEW = "documents.view"
+PERM_DOC_UPLOAD = "documents.upload"
+PERM_DOC_DELETE = "documents.delete"
+PERM_DOC_DOWNLOAD = "documents.download"
+
+PERM_ADMIN_VIEW = "system.admins.view"
+PERM_ADMIN_MANAGE = "system.admins.manage"
+
+ALL_PERMISSIONS = [
+    PERM_DASHBOARD,
+    PERM_DOC_VIEW, PERM_DOC_UPLOAD, PERM_DOC_DELETE, PERM_DOC_DOWNLOAD,
+    PERM_USER_VIEW, PERM_USER_CREATE, PERM_USER_EDIT, PERM_USER_DELETE, PERM_USER_IMPORT, PERM_USER_VIEW_DATA,
+    PERM_ADMIN_VIEW, PERM_ADMIN_MANAGE,
+]
+
+# Parent → children mapping for legacy permissions
+PERM_CHILDREN = {
+    "users.manage": [PERM_USER_VIEW, PERM_USER_CREATE, PERM_USER_EDIT, PERM_USER_DELETE, PERM_USER_IMPORT],
+    "documents.manage": [PERM_DOC_UPLOAD, PERM_DOC_DELETE],
+}
+
+PERM_GROUPS = [
+    {
+        "group": "dashboard",
+        "label": "总览",
+        "perms": [
+            {"key": PERM_DASHBOARD, "label": "查看总览"},
+        ],
+    },
+    {
+        "group": "documents",
+        "label": "知识库",
+        "perms": [
+            {"key": PERM_DOC_VIEW, "label": "查看文档"},
+            {"key": PERM_DOC_UPLOAD, "label": "上传文档"},
+            {"key": PERM_DOC_DELETE, "label": "删除文档"},
+            {"key": PERM_DOC_DOWNLOAD, "label": "下载文件"},
+        ],
+    },
+    {
+        "group": "users",
+        "label": "用户管理",
+        "perms": [
+            {"key": PERM_USER_VIEW, "label": "查看用户列表"},
+            {"key": PERM_USER_CREATE, "label": "创建用户"},
+            {"key": PERM_USER_EDIT, "label": "编辑用户"},
+            {"key": PERM_USER_DELETE, "label": "删除用户"},
+            {"key": PERM_USER_IMPORT, "label": "批量导入"},
+            {"key": PERM_USER_VIEW_DATA, "label": "查看用户数据"},
+        ],
+    },
+    {
+        "group": "system.admins",
+        "label": "管理员管理",
+        "perms": [
+            {"key": PERM_ADMIN_VIEW, "label": "查看管理员"},
+            {"key": PERM_ADMIN_MANAGE, "label": "管理权限"},
+        ],
+    },
+]
+
 
 class UserPublic(BaseModel):
     id: str
@@ -22,6 +92,12 @@ class UserPublic(BaseModel):
     role: str
     display_name: str
     created_at: str
+    employee_id: Optional[str] = None
+    avatar_url: str = ""
+    phone: str = ""
+    is_online: bool = False
+    is_super_admin: bool = False
+    permissions: list[str] = []
 
 
 def _hash_password(password: str) -> str:
@@ -29,41 +105,107 @@ def _hash_password(password: str) -> str:
     return hashlib.sha256(f"{password}:{SECRET_KEY}".encode()).hexdigest()
 
 
+def _generate_employee_id(prefix: str = "EMP") -> str:
+    import random
+    suffix = ''.join(random.choices("0123456789", k=6))
+    return f"{prefix}-{suffix}"
+
+
+def _validate_employee_id(eid: str) -> bool:
+    import re
+    return bool(re.match(r'^(EMP|ADM)-\d{6}$', eid))
+
+
+def _parse_permissions(user) -> list[str]:
+    if not user.permissions:
+        return []
+    try:
+        return json.loads(user.permissions)
+    except (json.JSONDecodeError, TypeError):
+        return []
+
+
+def _user_to_public(user) -> dict:
+    perms = _parse_permissions(user)
+    return {
+        "id": user.id, "username": user.username, "role": user.role,
+        "display_name": user.display_name or user.username,
+        "created_at": user.created_at.isoformat() if user.created_at else "",
+        "employee_id": user.employee_id,
+        "avatar_url": user.avatar_url or "",
+        "phone": user.phone or "",
+        "is_online": False,
+        "is_super_admin": user.role == "super_admin",
+        "permissions": perms,
+    }
+
+
 async def create_user(
     db: AsyncSession, username: str, password: str,
     role: str = "employee", display_name: str = "",
+    employee_id: str = None, avatar_url: str = "", phone: str = "",
 ) -> UserPublic:
+    import re
+    if not username or len(username.strip()) < 3 or len(username) > 50:
+        raise HTTPException(status_code=400, detail="用户名长度需在 3-50 个字符之间")
+    if not re.match(r'^[a-zA-Z0-9_-]+$', username.strip()):
+        raise HTTPException(status_code=400, detail="用户名只能包含字母、数字、下划线和连字符")
+    if len(password) < 8 or len(password) > 128:
+        raise HTTPException(status_code=400, detail="密码长度需在 8-128 个字符之间")
+    if not re.search(r'[a-z]', password):
+        raise HTTPException(status_code=400, detail="密码必须包含小写字母")
+    if not re.search(r'[A-Z]', password):
+        raise HTTPException(status_code=400, detail="密码必须包含大写字母")
+    if not re.search(r'[0-9]', password):
+        raise HTTPException(status_code=400, detail="密码必须包含数字")
+    if not re.search(r'[!@#$%^&*()_+\-=\[\]{};:\'",.<>\/?\\|]', password):
+        raise HTTPException(status_code=400, detail="密码必须包含至少一个特殊字符")
+    username = username.strip()
+    if display_name and len(display_name) > 100:
+        raise HTTPException(status_code=400, detail="显示名称不超过 100 个字符")
     result = await db.execute(select(UserModel).where(UserModel.username == username))
     if result.scalar_one_or_none():
         raise HTTPException(status_code=400, detail="用户名已存在")
+    if employee_id:
+        if not _validate_employee_id(employee_id):
+            raise HTTPException(status_code=400, detail="工号格式：3-30位字母、数字和连字符，不能以连字符开头或结尾")
+        result = await db.execute(select(UserModel).where(UserModel.employee_id == employee_id))
+        if result.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="工号已存在")
+    else:
+        prefix = "ADM" if role in ("admin", "super_admin") else "EMP"
+        employee_id = _generate_employee_id(prefix)
+        while True:
+            result = await db.execute(select(UserModel).where(UserModel.employee_id == employee_id))
+            if not result.scalar_one_or_none():
+                break
+            employee_id = _generate_employee_id(prefix)
     user = UserModel(
         id=str(uuid.uuid4()),
         username=username,
         password_hash=_hash_password(password),
         role=role,
         display_name=display_name or username,
+        employee_id=employee_id,
+        avatar_url=avatar_url,
+        phone=phone,
         created_at=datetime.now(timezone.utc),
     )
     db.add(user)
     await db.commit()
     await db.refresh(user)
-    return UserPublic(
-        id=user.id, username=user.username, role=user.role,
-        display_name=user.display_name,
-        created_at=user.created_at.isoformat() if user.created_at else "",
-    )
+    return UserPublic(**_user_to_public(user))
 
 
 async def authenticate_user(db: AsyncSession, username: str, password: str) -> Optional[dict]:
-    result = await db.execute(select(UserModel).where(UserModel.username == username))
+    result = await db.execute(
+        select(UserModel).where(or_(UserModel.username == username, UserModel.employee_id == username))
+    )
     user = result.scalar_one_or_none()
     if user and user.password_hash == _hash_password(password):
-        return {
-            "id": user.id, "username": user.username, "role": user.role,
-            "display_name": user.display_name,
-            "created_at": user.created_at.isoformat() if user.created_at else "",
-            "preferences": user.preferences or "{}",
-        }
+        user.last_login_at = datetime.now(timezone.utc)
+        await db.commit()
+        return _user_to_public(user)
     return None
 
 
@@ -71,21 +213,29 @@ async def get_user_by_id(db: AsyncSession, user_id: str) -> Optional[dict]:
     result = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = result.scalar_one_or_none()
     if user:
-        return {
-            "id": user.id, "username": user.username, "role": user.role,
-            "display_name": user.display_name,
-            "created_at": user.created_at.isoformat() if user.created_at else "",
-        }
+        pub = _user_to_public(user)
+        from app.redis_client import is_user_online
+        try:
+            pub["is_online"] = await is_user_online(user_id)
+        except Exception:
+            pass
+        return pub
     return None
 
 
 def create_access_token(user: dict) -> str:
-    import jwt
+    import jwt, uuid
+    now = datetime.now(timezone.utc)
+    jti = str(uuid.uuid4())
     payload = {
+        "jti": jti,
         "user_id": user["id"],
         "username": user["username"],
         "role": user["role"],
-        "exp": datetime.now(timezone.utc) + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
+        "is_super_admin": user.get("is_super_admin", False),
+        "permissions": user.get("permissions", []),
+        "iat": now,
+        "exp": now + timedelta(hours=ACCESS_TOKEN_EXPIRE_HOURS),
     }
     return jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
 
@@ -106,15 +256,51 @@ async def get_current_user(
 ) -> dict:
     if credentials is None:
         raise HTTPException(status_code=401, detail="未登录，请先登录")
-    payload = decode_token(credentials.credentials)
+    token_str = credentials.credentials
+    payload = decode_token(token_str)
     if payload is None:
         raise HTTPException(status_code=401, detail="登录已过期，请重新登录")
+    # Redis token consistency check
+    try:
+        from app.redis_client import get_stored_token
+        stored = await get_stored_token(payload["user_id"])
+        if stored is not None and stored != token_str:
+            raise HTTPException(status_code=401, detail="账号已在其他地方登录，请重新登录")
+    except HTTPException:
+        raise
+    except Exception:
+        pass  # Redis unavailable, fall through to JWT-only check
     return payload
 
 
+async def invalidate_sessions(user_id: str):
+    from app.redis_client import remove_token
+    try:
+        await remove_token(user_id)
+    except Exception:
+        pass
+
+
+async def refresh_user_online(user_id: str, ttl_seconds: int):
+    from app.redis_client import get_redis
+    from app.redis_client import ONLINE_KEY_PREFIX
+    try:
+        r = await get_redis()
+        await r.setex(f"{ONLINE_KEY_PREFIX}{user_id}", ttl_seconds, "1")
+    except Exception:
+        pass
+
+
 async def require_admin(current_user: dict = Security(get_current_user)) -> dict:
-    if current_user.get("role") != "admin":
+    role = current_user.get("role")
+    if role not in ("admin", "super_admin"):
         raise HTTPException(status_code=403, detail="需要管理员权限")
+    return current_user
+
+
+async def require_super_admin(current_user: dict = Security(get_current_user)) -> dict:
+    if current_user.get("role") != "super_admin":
+        raise HTTPException(status_code=403, detail="需要系统管理员权限")
     return current_user
 
 
@@ -123,50 +309,144 @@ async def list_users(db: AsyncSession) -> list:
         select(UserModel).order_by(UserModel.created_at.desc())
     )
     users = result.scalars().all()
-    return [
-        {"id": u.id, "username": u.username, "role": u.role,
-         "display_name": u.display_name,
-         "created_at": u.created_at.isoformat() if u.created_at else ""}
-        for u in users
-    ]
+    pub_list = [_user_to_public(u) for u in users]
+    from app.redis_client import is_user_online
+    try:
+        for pub in pub_list:
+            pub["is_online"] = await is_user_online(pub["id"])
+    except Exception:
+        pass
+    return pub_list
 
 
-async def update_user(db: AsyncSession, user_id: str, display_name: str = None, password: str = None) -> bool:
-    result = await db.execute(select(UserModel).where(UserModel.id == user_id, UserModel.role != "admin"))
+async def list_admins(db: AsyncSession) -> list:
+    result = await db.execute(
+        select(UserModel).where(UserModel.role.in_(["admin", "super_admin"])).order_by(UserModel.created_at.desc())
+    )
+    admins = result.scalars().all()
+    return [_user_to_public(u) for u in admins]
+
+
+async def update_user(
+    db: AsyncSession, user_id: str, display_name: str = None,
+    password: str = None, employee_id: str = None,
+    avatar_url: str = None, phone: str = None,
+) -> bool:
+    result = await db.execute(select(UserModel).where(UserModel.id == user_id))
     user = result.scalar_one_or_none()
     if not user:
         return False
     if display_name is not None:
         user.display_name = display_name
     if password is not None:
+        if len(password) < 8 or len(password) > 128:
+            raise HTTPException(status_code=400, detail="密码长度需在 8-128 个字符之间")
+        if not any(c.islower() for c in password):
+            raise HTTPException(status_code=400, detail="密码必须包含小写字母")
+        if not any(c.isupper() for c in password):
+            raise HTTPException(status_code=400, detail="密码必须包含大写字母")
+        if not any(c.isdigit() for c in password):
+            raise HTTPException(status_code=400, detail="密码必须包含数字")
+        import re
+        if not re.search(r'[!@#$%^&*()_+\-=\[\]{};:\'",.<>\/?\\|]', password):
+            raise HTTPException(status_code=400, detail="密码必须包含至少一个特殊字符")
         user.password_hash = _hash_password(password)
+    if employee_id is not None:
+        if not _validate_employee_id(employee_id):
+            raise HTTPException(status_code=400, detail="工号格式：3-30位字母、数字和连字符，不能以连字符开头或结尾")
+        existing = await db.execute(select(UserModel).where(UserModel.employee_id == employee_id, UserModel.id != user_id))
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=400, detail="工号已被使用")
+        user.employee_id = employee_id
+    if avatar_url is not None:
+        user.avatar_url = avatar_url
+    if phone is not None:
+        user.phone = phone
     await db.commit()
     return True
 
 
-async def delete_user(db: AsyncSession, user_id: str) -> bool:
+async def update_admin_permissions(db: AsyncSession, user_id: str, permissions: list[str]) -> bool:
     result = await db.execute(
-        select(UserModel).where(UserModel.id == user_id, UserModel.role != "admin")
+        select(UserModel).where(UserModel.id == user_id, UserModel.role == "admin")
     )
     user = result.scalar_one_or_none()
     if not user:
+        return False
+    user.permissions = json.dumps(permissions)
+    await db.commit()
+    return True
+
+
+async def delete_user(db: AsyncSession, user_id: str, is_super_admin: bool = False) -> bool:
+    from sqlalchemy import delete as _d
+    from app.memory import ConversationHistory
+    from app.memory import Conversation as ConvModel
+    from app.memory import MemoryFact
+    from app.memory import ConversationSummary
+    for tbl in [ConversationHistory, ConvModel, MemoryFact, ConversationSummary]:
+        await db.execute(_d(tbl).where(tbl.user_id == user_id))
+    role_filter = [UserModel.id == user_id]
+    if not is_super_admin:
+        role_filter.append(UserModel.role.notin_(["admin", "super_admin"]))
+    result = await db.execute(
+        select(UserModel).where(*role_filter)
+    )
+    user = result.scalar_one_or_none()
+    if not user:
+        await db.commit()
         return False
     await db.delete(user)
     await db.commit()
     return True
 
 
+async def batch_delete_users(db: AsyncSession, user_ids: list[str], is_super_admin: bool = False) -> int:
+    from sqlalchemy import delete as _d
+    from app.memory import ConversationHistory
+    from app.memory import Conversation as ConvModel
+    from app.memory import MemoryFact
+    from app.memory import ConversationSummary
+    for tbl in [ConversationHistory, ConvModel, MemoryFact, ConversationSummary]:
+        await db.execute(_d(tbl).where(tbl.user_id.in_(user_ids)))
+    stmt = _d(UserModel).where(UserModel.id.in_(user_ids))
+    if not is_super_admin:
+        stmt = stmt.where(UserModel.role.notin_(["admin", "super_admin"]))
+    result = await db.execute(stmt)
+    await db.commit()
+    return result.rowcount
+
+
+async def check_employee_ids(db: AsyncSession, employee_ids: list[str]) -> list:
+    if not employee_ids:
+        return []
+    result = await db.execute(
+        select(UserModel.employee_id).where(UserModel.employee_id.in_(employee_ids))
+    )
+    registered = {row[0] for row in result.fetchall()}
+    return [
+        {"employee_id": eid, "registered": eid in registered}
+        for eid in employee_ids
+    ]
+
+
 async def init_admin():
     async with AsyncSessionLocal() as db:
         result = await db.execute(select(UserModel).where(UserModel.username == "admin"))
-        if not result.scalar_one_or_none():
+        admin = result.scalar_one_or_none()
+        if not admin:
             admin = UserModel(
                 id=str(uuid.uuid4()),
                 username="admin",
                 password_hash=_hash_password("admin123"),
-                role="admin",
+                role="super_admin",
                 display_name="系统管理员",
+                employee_id=_generate_employee_id(),
                 created_at=datetime.now(timezone.utc),
             )
             db.add(admin)
+            await db.commit()
+        elif admin.role != "super_admin":
+            admin.role = "super_admin"
+            admin.permissions = ""
             await db.commit()

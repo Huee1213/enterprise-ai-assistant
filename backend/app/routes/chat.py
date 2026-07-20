@@ -178,7 +178,7 @@ async def chat_simple(
 
 
 @router.post("/title", response_model=TitleResponse)
-async def generate_title(request: TitleRequest):
+async def generate_title(request: TitleRequest, current_user: dict = Depends(get_current_user)):
     title = request.message.strip()[:15] + ("..." if len(request.message) > 15 else "")
     if not title:
         return TitleResponse(title="新对话")

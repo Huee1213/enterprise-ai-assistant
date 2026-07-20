@@ -1,4 +1,5 @@
 import apiClient from './client'
+import { dispatchStaleSession } from './client'
 import type { ChatRequest, ChatResponse, SSEEvent } from '@/types'
 
 export async function sendChatMessage(request: ChatRequest): Promise<ChatResponse> {
@@ -28,7 +29,11 @@ export function createChatStream(
     .then(async (response) => {
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
-        throw new Error(errorData.detail || `HTTP ${response.status}`)
+        const detail = errorData.detail || `HTTP ${response.status}`
+        if (response.status === 401 && typeof detail === 'string' && detail.includes('已在其他地方登录') && token) {
+          dispatchStaleSession()
+        }
+        throw new Error(detail)
       }
 
       const reader = response.body?.getReader()

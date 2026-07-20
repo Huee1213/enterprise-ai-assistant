@@ -3,6 +3,8 @@ import { ref, computed, onMounted, nextTick } from 'vue'
 import { listDocuments, deleteDocument, batchDeleteDocuments } from '@/api/documents'
 import type { DocumentInfo } from '@/types'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import { useAuthStore } from '@/stores/auth'
+const auth = useAuthStore()
 
 const emit = defineEmits<{
   viewDetail: [docId: string]
@@ -106,7 +108,7 @@ onMounted(fetchDocuments)
     <div class="flex items-center justify-between mb-3">
       <h3 class="text-sm font-medium">已上传文档</h3>
       <button
-        v-if="selectedIds.size > 0"
+        v-if="auth.hasPermission('documents.delete') && selectedIds.size > 0"
         @click="confirmBatchDelete"
         class="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
       >
@@ -167,7 +169,7 @@ onMounted(fetchDocuments)
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>
             查看
           </button>
-          <button @click="confirmDelete(doc.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="删除">
+          <button v-if="auth.hasPermission('documents.delete')" @click="confirmDelete(doc.id)" class="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors" title="删除">
             <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18" /><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" /><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" /></svg>
             删除
           </button>

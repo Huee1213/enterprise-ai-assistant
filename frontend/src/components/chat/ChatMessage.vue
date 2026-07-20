@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
-import { marked } from 'marked'
+import { computed, ref, onMounted, onUnmounted } from 'vue'
+import { marked, Renderer } from 'marked'
 import type { Message } from '@/types'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 const props = defineProps<{
   message: Message
@@ -23,6 +26,65 @@ const expandedSteps = ref<Set<string>>(new Set())
 const editing = ref(false)
 const editText = ref('')
 const copied = ref(false)
+
+// Language name mapping
+const LANG_LABELS: Record<string, string> = {
+  js: 'JavaScript', javascript: 'JavaScript', ts: 'TypeScript', typescript: 'TypeScript',
+  py: 'Python', python: 'Python',
+  java: 'Java',
+  go: 'Go', golang: 'Go',
+  rs: 'Rust', rust: 'Rust',
+  cpp: 'C++', c: 'C', cs: 'C#', csharp: 'C#',
+  rb: 'Ruby', ruby: 'Ruby',
+  php: 'PHP',
+  swift: 'Swift', kt: 'Kotlin', kotlin: 'Kotlin',
+  sh: 'Shell', bash: 'Bash', zsh: 'Zsh',
+  ps1: 'PowerShell', powershell: 'PowerShell', pwsh: 'PowerShell',
+  cmd: 'CMD', bat: 'Batch',
+  sql: 'SQL',
+  html: 'HTML', xml: 'XML', json: 'JSON', yaml: 'YAML', yml: 'YAML',
+  md: 'Markdown', markdown: 'Markdown',
+  dockerfile: 'Dockerfile', docker: 'Docker',
+  nginx: 'Nginx', conf: 'Config',
+  diff: 'Diff',
+  text: 'Text', plain: 'Plain',
+}
+
+function langLabel(lang: string): string {
+  return LANG_LABELS[lang.toLowerCase()] || lang
+}
+
+// Custom marked renderer with enhanced code blocks
+const renderer = new Renderer()
+renderer.code = function ({ text, lang, escaped }) {
+  const label = lang ? langLabel(lang) : 'Code'
+  const id = `cb-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+  // Escape HTML in raw code text for safe display
+  const code = text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+  return `<div class="code-block group relative my-3 rounded-lg border border-border overflow-hidden bg-card">
+    <div class="flex items-center justify-between px-3 py-1.5 bg-muted/60 border-b border-border text-[10px] text-muted-foreground">
+      <span class="font-medium">${label}</span>
+      <button
+        onclick="(function(btn){
+          var code = btn.closest('.code-block').querySelector('pre code');
+          var text = code.textContent || code.innerText;
+          navigator.clipboard.writeText(text).then(function(){
+            btn.textContent = '已复制';
+            btn.classList.add('text-green-500');
+            setTimeout(function(){ btn.textContent = '复制'; btn.classList.remove('text-green-500'); }, 2000);
+          });
+        })(this)"
+        class="code-copy opacity-0 group-hover:opacity-100 transition-opacity px-1.5 py-0.5 rounded hover:bg-muted-foreground/10"
+      >复制</button>
+    </div>
+    <pre class="p-3 overflow-x-auto text-xs leading-relaxed"><code>${code}</code></pre>
+  </div>`
+}
+
+marked.setOptions({ renderer })
 
 async function copyContent() {
   if (!props.message.content) return
@@ -127,17 +189,18 @@ const agentStatusText = computed(() => {
         <svg v-if="selected" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" class="text-primary-foreground"><polyline points="20 6 9 17 4 12"/></svg>
       </div>
     </div>
-    <div v-else class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold mt-1"
-      :class="isUser ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground'"
+    <div v-else class="shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold mt-1 overflow-hidden"
+      :class="isUser ? 'bg-primary/10 text-primary' : 'bg-secondary text-secondary-foreground'"
     >
-      {{ isUser ? '我' : 'AI' }}
+      <img v-if="isUser && auth.user?.avatar_url" :src="auth.user.avatar_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'" />
+      <span v-else>{{ isUser ? (auth.user?.display_name || auth.user?.username || '我')[0] : 'AI' }}</span>
     </div>
 
-    <div class="max-w-[80%] space-y-2">
+    <div class="flex-1 max-w-[80%] flex flex-col gap-0.5" :class="isUser ? 'items-end' : 'items-start'">
       <div
-        class="rounded-2xl px-4 py-3 relative"
+        class="rounded-2xl px-4 py-3 relative w-fit min-w-[60px]"
         :class="isUser
-          ? 'bg-primary text-primary-foreground rounded-tr-sm'
+          ? 'bg-primary/10 text-foreground rounded-tr-sm'
           : 'bg-card text-card-foreground border border-border rounded-tl-sm'"
       >
         <!-- Edit button for user messages -->
@@ -263,11 +326,11 @@ const agentStatusText = computed(() => {
           </details>
         </div>
 
-        <!-- Markdown content or plain user text -->
-        <div v-if="!editing" class="markdown-content text-sm leading-relaxed max-w-none" :class="isUser ? '' : ''">
-          <template v-if="isUser">{{ message.content }}</template>
-          <template v-else><div v-html="renderedContent" /></template>
-        </div>
+        <!-- User message text (markdown) -->
+        <div v-if="!editing && isUser" class="markdown-content text-sm leading-relaxed max-w-none w-fit" v-html="renderedContent" />
+
+        <!-- Assistant message text (markdown) -->
+        <div v-if="!editing && !isUser" class="markdown-content text-sm leading-relaxed max-w-none w-fit" v-html="renderedContent" />
 
         <div v-if="message.sources && message.sources.length > 0 && !isStreaming" class="mt-3 pt-3 border-t border-border/50">
           <p class="text-xs font-medium text-muted-foreground mb-2">📎 来源:</p>

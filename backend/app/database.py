@@ -20,8 +20,13 @@ class UserModel(Base):
     password_hash = Column(String(128), nullable=False)
     role = Column(String(20), nullable=False, default="employee")
     display_name = Column(String(100), default="")
+    employee_id = Column(String(50), unique=True, nullable=True, index=True)
+    avatar_url = Column(String(500), default="")
+    phone = Column(String(30), default="")
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     preferences = Column(Text, default="{}")
+    permissions = Column(Text, default="")  # JSON array for admin role permissions; empty = all/super_admin
 
 
 async def get_db() -> AsyncSession:
@@ -39,6 +44,13 @@ async def init_db():
             "CREATE TABLE IF NOT EXISTS conversations (id VARCHAR(36) PRIMARY KEY, user_id VARCHAR(36) REFERENCES users(id) ON DELETE CASCADE, title VARCHAR(200) DEFAULT '新对话', created_at TIMESTAMPTZ DEFAULT NOW(), updated_at TIMESTAMPTZ DEFAULT NOW())",
             "CREATE INDEX IF NOT EXISTS idx_conversations_user ON conversations(user_id)",
             "ALTER TABLE conversation_history ADD COLUMN IF NOT EXISTS msg_meta TEXT DEFAULT '{}'",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS employee_id VARCHAR(50)",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS avatar_url VARCHAR(500) DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) DEFAULT ''",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS last_login_at TIMESTAMPTZ",
+            "ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT ''",
+            "UPDATE users SET role = 'super_admin' WHERE username = 'admin'",
+            "UPDATE users SET employee_id = CONCAT('EMP-', UPPER(SUBSTRING(MD5(id::text) FROM 1 FOR 6))) WHERE employee_id IS NULL OR employee_id = ''",
         ]
         for sql in migrations:
             try:

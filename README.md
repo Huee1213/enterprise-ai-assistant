@@ -7,6 +7,9 @@
 ## 🎯 功能特性
 
 - **🔐 用户认证与角色权限** — JWT 双角色（管理员/员工），管理员管理知识库与用户，员工使用问答
+- **🔑 细粒度权限系统** — 12 项权限（文档/用户/系统分组），权限修改即时生效，无需重新登录
+- **🔐 Redis 令牌管理** — 多设备登录冲突检测，支持强制登录（409 弹窗 + 401 跨设备踢出）
+- **🔐 密码强度检测** — 5 项指标实时评估（小写/大写/数字/特殊字符/长度），一键生成安全密码
 - **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV，单文件 500MB 上限，支持多文件批量上传
 - **🗑️ 文档多选删除** — 支持逐条删除和批量删除（`POST /api/documents/batch-delete`）
 - **🤖 LangGraph Agent 工作流** — 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
@@ -53,7 +56,8 @@ enterprise-ai-assistant/
 │   │   ├── config.py            # 环境变量配置
 │   │   ├── models.py            # Pydantic 数据模型
 │   │   ├── database.py          # SQLAlchemy 2.0 async + PostgreSQL
-│   │   ├── auth.py              # JWT 认证、用户管理
+│   │   ├── auth.py              # JWT 认证、Redis 令牌管理
+│   │   ├── redis_client.py      # Redis 连接、Token CRUD、在线状态
 │   │   ├── memory.py            # 长短期记忆系统（SQLAlchemy ORM）
 │   │   ├── embeddings.py        # 向量化（FastEmbed 本地）
 │   │   ├── vector_store.py      # Milvus 向量存储
@@ -92,7 +96,8 @@ enterprise-ai-assistant/
 │   ├── Dockerfile
 │   └── package.json
 ├── searxng/                      # SearXNG 配置
-│   └── settings.yml
+│   ├── settings.yml              # （已 gitignore，需从 .example 复制）
+│   └── settings.yml.example      # 示例配置
 ├── docker-compose.yml            # 8 服务编排
 ├── .env.example
 └── README.md
@@ -114,6 +119,9 @@ git clone <仓库地址> enterprise-ai-assistant
 cd enterprise-ai-assistant
 
 cp .env.example .env
+
+# SearXNG 配置文件（非必需，容器首次启动会自动生成默认配置）
+cp searxng/settings.yml.example searxng/settings.yml
 ```
 
 编辑 `.env` 文件：
