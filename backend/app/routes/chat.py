@@ -86,49 +86,56 @@ async def chat_stream(
         generator = stream_rag(request.message, memory_ctx, history_ctx=history_ctx, db=db, user_id=user_id, conv_id=conv_id)
 
     async def _post_stream_tasks(conv_id: str, user_msg: str, reply: str):
-        """Background: summary generation only (runs after SSE stream ends).
-        Fact extraction is lightweight keyword-based inline to avoid LLM overhead.
-        Uses its own DB session.
-        """
+        """Background post-stream processing. LLM calls run in thread pool to not block event loop."""
         from app.database import AsyncSessionLocal
-        # Lightweight keyword-based fact extraction (no LLM call)
-        if user_msg:
-            q = user_msg.lower()
-            fact_kw = {"我叫": "姓名", "我是": "身份", "我喜欢": "喜好", "我的名字": "姓名",
-                       "我今年": "年龄", "我住在": "住址", "我的职业": "职业",
-                       "我工作": "工作", "我学": "学习", "我出生": "出生", "我来自": "来自",
-                       "remember": "remember", "my name": "name", "i am": "identity",
-                       "i like": "preference", "i work": "work", "i study": "study",
-                       "i live": "live"}
-            found = []
-            for kw, cat in fact_kw.items():
-                if kw in q:
-                    idx = q.index(kw)
-                    found.append(q[idx:idx+80].split("\n")[0][:60])
-            if found:
+        import asyncio as _aio
+        loop = _aio.get_running_loop()
+        # ── LLM-based fact extraction (in thread pool) ──
+        if user_msg and reply:
+            trigger_kw = ("我叫", "我是", "我喜欢", "我的名字", "我今年", "我住在", "我的职业",
+                         "我在", "我工作", "我学", "我出生", "我来自",
+                         "remember", "my name", "i am", "i like", "i work", "i study", "i live", "i'm")
+            if any(kw in user_msg.lower() for kw in trigger_kw):
+                def _sync_fact(um: str, ar: str) -> str | None:
+                    from langchain_openai import ChatOpenAI
+                    from langchain_core.messages import SystemMessage, HumanMessage
+                    from app.memory import generate_fact_from_message
+                    llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                    import asyncio as _a
+                    _a.run(generate_fact_from_message(llm, um, ar))
                 try:
-                    async with AsyncSessionLocal() as bg_db:
-                        for f in found:
-                            await add_user_fact(bg_db, user_id, f)
+                    fact = await loop.run_in_executor(None, _sync_fact, user_msg, reply)
+                    if fact:
+                        async with AsyncSessionLocal() as bg_db:
+                            await add_user_fact(bg_db, user_id, fact)
                 except Exception:
                     pass
-        # Summary generation (LLM, limited to every 10 messages)
+        # ── Summary generation (LLM, in a separate thread to not block the event loop) ──
         try:
             async with AsyncSessionLocal() as bg_db:
-                from langchain_core.messages import SystemMessage, HumanMessage
-                from langchain_openai import ChatOpenAI
                 hist = await get_conversation_history(bg_db, user_id, conv_id)
                 existing = await get_conversation_summary(bg_db, user_id, conv_id)
-                msg_count = len(hist)
-                if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
-                    shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=500, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                if len(hist) >= 10 and (len(hist) % 10 == 0 or not existing):
+                    import asyncio as _aio
+                    loop = _aio.get_running_loop()
                     context_parts = []
                     if existing:
                         context_parts.append(f"旧摘要: {existing}")
                     context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:800]}" for h in hist[-10:]))
-                    resp = await shared_llm.ainvoke([SystemMessage(content="你是一个对话摘要生成器。根据以下的对话内容，生成一段简洁完整的对话摘要，涵盖关键问题和回答。只输出摘要内容本身，不要前缀、不要引号。"), HumanMessage(content="\n\n".join(context_parts))])
-                    summary = resp.content.strip().strip('"').strip("'")
-                    if summary and len(summary) > 5:
+                    context = "\n\n".join(context_parts)
+                    def _sync_summary(context: str) -> str | None:
+                        from langchain_openai import ChatOpenAI
+                        from langchain_core.messages import SystemMessage, HumanMessage
+                        llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=500, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                        try:
+                            import json
+                            resp = llm.invoke([SystemMessage(content="你是一个对话摘要生成器。根据以下的对话内容，生成一段简洁完整的对话摘要，涵盖关键问题和回答。只输出摘要内容本身，不要前缀、不要引号。"), HumanMessage(content=context)])
+                            s = resp.content.strip().strip('"').strip("'")
+                            return s if len(s) > 5 else None
+                        except Exception:
+                            return None
+                    summary = await loop.run_in_executor(None, _sync_summary, context)
+                    if summary:
                         await add_conversation_summary(bg_db, user_id, conv_id, summary)
         except Exception:
             pass
