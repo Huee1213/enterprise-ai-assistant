@@ -68,6 +68,7 @@ enterprise-ai-assistant/
 │   │   ├── document_processor.py # 文件解析与分块
 │   │   ├── document_registry.py # 文档元数据 + 文本块存储
 │   │   ├── tools.py             # LangChain 工具（知识/网页/时间/摘要）
+│   │   ├── runtime_config.py    # 运行时配置（env + DB 覆盖/Agent 生效）
 │   │   ├── agent_graph.py       # LangGraph 状态机 + Agent
 │   │   └── routes/
 │   │       ├── auth.py          # 登录/注册/用户管理
@@ -217,7 +218,8 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `GET` | `/api/chat/conversations` | JWT | — | 对话列表 |
 | `GET` | `/api/chat/conversations/{id}` | JWT | — | 对话消息历史 |
 | `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
-| `GET` | `/api/chat/conversations/{id}/search?q=` | JWT | — | 搜索对话内消息
+| `GET` | `/api/chat/conversations/{id}/search?q=` | JWT | — | 搜索对话内消息 |
+| `DELETE` | `/api/chat/conversations/{id}/messages/from/{mid}` | JWT | — | 删除该消息及之后所有消息 |
 | `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |
 | `POST` | `/api/chat/conversations/{id}/messages/bulk-delete` | JWT | — | 批量删除消息 |
 | `PUT` | `/api/chat/conversations/{id}/title` | JWT | — | 更新对话标题 |
