@@ -138,6 +138,7 @@ async function fetchModels() {
       provider: llmProvider.value,
       api_key: llmApiKey.value.includes('•') ? '' : llmApiKey.value,
       api_base: base,
+      type: 'text',
     })
     fetchedModels.value = resp.data.models
     modelDropdownOpen.value = true
@@ -259,6 +260,7 @@ async function fetchEmbModels() {
       provider: actualProvider,
       api_key: embApiKey.value.includes('•') ? '' : embApiKey.value,
       api_base: base,
+      type: 'embedding',
     })
     embFetchedModels.value = resp.data.models
     embModelOpen.value = true
@@ -523,6 +525,7 @@ onMounted(loadConfig)
               <div class="relative flex-1 min-w-0">
                 <input
                   v-model="modelSearch"
+                  :title="config.llm_model"
                   @input="config.llm_model = modelSearch; modelDropdownOpen = true"
                   @focus="handleModelInputFocus"
                   @blur="handleModelInputBlur"
@@ -534,8 +537,8 @@ onMounted(loadConfig)
                   <button v-for="m in filteredModels" :key="m.id" @mousedown.prevent="selectModel(m)"
                     class="w-full text-left px-3 py-2 text-xs text-popover-foreground hover:bg-muted transition-colors border-b border-border/30 last:border-0"
                     :class="config.llm_model === m.id ? 'bg-primary/5 font-medium' : ''">
-                    <span class="block truncate">{{ m.name }}</span>
-                    <span class="block text-[9px] text-muted-foreground/50 truncate">{{ m.id }}</span>
+                    <span class="block truncate" :title="m.name">{{ m.name }}</span>
+                    <span class="block text-[9px] text-muted-foreground/50 truncate" :title="m.id">{{ m.id }}</span>
                   </button>
                 </div>
                 <div v-if="modelDropdownOpen && fetchedModels.length > 0 && filteredModels.length === 0"
@@ -644,7 +647,7 @@ onMounted(loadConfig)
             </div>
             <div class="w-56 flex items-center gap-1.5">
               <div class="relative flex-1 min-w-0">
-                <input v-model="embModelSearch" @input="config.embedding_model = embModelSearch; embModelOpen = true"
+                <input v-model="embModelSearch" :title="config.embedding_model" @input="config.embedding_model = embModelSearch; embModelOpen = true"
                   @focus="handleEmbModelFocus" @blur="handleEmbModelBlur"
                   type="text" placeholder="local/BAAI/bge-small-en-v1.5"
                   class="w-full h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30" />
@@ -653,8 +656,8 @@ onMounted(loadConfig)
                   <button v-for="m in filteredEmbModels" :key="m.id" @mousedown.prevent="selectEmbModel(m)"
                     class="w-full text-left px-3 py-2 text-xs text-popover-foreground hover:bg-muted transition-colors border-b border-border/30 last:border-0"
                     :class="config.embedding_model === m.id ? 'bg-primary/5 font-medium' : ''">
-                    <span class="block truncate">{{ m.name }}</span>
-                    <span class="block text-[9px] text-muted-foreground/50 truncate">{{ m.id }}</span>
+                    <span class="block truncate" :title="m.name">{{ m.name }}</span>
+                    <span class="block text-[9px] text-muted-foreground/50 truncate" :title="m.id">{{ m.id }}</span>
                   </button>
                 </div>
                 <div v-if="embModelOpen && embFetchedModels.length > 0 && filteredEmbModels.length === 0"

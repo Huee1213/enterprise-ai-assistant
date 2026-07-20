@@ -1,5 +1,7 @@
 import uuid
 import json
+import hashlib
+import hmac
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pydantic import BaseModel
@@ -9,9 +11,17 @@ from sqlalchemy import select, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.database import get_db, UserModel, AsyncSessionLocal
 
-SECRET_KEY = __import__("os").environ.get("JWT_SECRET_KEY", "enterprise-ai-secret-key-change-me")
+_jwt_secret = __import__("os").environ.get("JWT_SECRET_KEY")
+if not _jwt_secret:
+    raise RuntimeError(
+        "CRITICAL: JWT_SECRET_KEY environment variable is not set. "
+        "Generate with: openssl rand -hex 32"
+    )
+SECRET_KEY = _jwt_secret
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_HOURS = 24
+# Separate fixed salt for password hashing (changing JWT key should NOT invalidate passwords)
+PASSWORD_SALT = "enterprise-ai-password-salt-v1"
 
 security = HTTPBearer(auto_error=False)
 
@@ -110,7 +120,7 @@ class UserPublic(BaseModel):
 
 def _hash_password(password: str) -> str:
     import hashlib
-    return hashlib.sha256(f"{password}:{SECRET_KEY}".encode()).hexdigest()
+    return hashlib.sha256(f"{password}:{PASSWORD_SALT}".encode()).hexdigest()
 
 
 def _generate_employee_id(prefix: str = "EMP") -> str:
@@ -277,7 +287,8 @@ async def get_current_user(
     except HTTPException:
         raise
     except Exception:
-        pass  # Redis unavailable, fall through to JWT-only check
+        import logging
+        logging.getLogger(__name__).warning("Redis unavailable — skipping session validation")
     return payload
 
 

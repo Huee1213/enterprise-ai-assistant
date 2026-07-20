@@ -1,4 +1,5 @@
 import json
+import logging
 import httpx
 from fastapi import APIRouter, HTTPException, Depends
 from sqlalchemy import select, delete as sql_delete
@@ -9,6 +10,8 @@ from fastapi.encoders import jsonable_encoder
 from app.database import get_db, AgentConfig
 from app.config import settings
 from app.auth import get_current_user, require_admin
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/agent", tags=["Agent Config"])
 
@@ -205,10 +208,16 @@ class FetchModelsRequest(BaseModel):
     provider: str
     api_key: str
     api_base: str
+    type: str = "text"
 
 
 def _decode_json(resp: httpx.Response) -> dict:
     return json.loads(resp.content.decode("utf-8"))
+
+
+def _filter_models_by_type(models: list[dict], req_type: str) -> list[dict]:
+    """No server-side filtering — return all models; frontend handles display."""
+    return models
 
 
 @router.post("/config/fetch-models")
@@ -251,20 +260,36 @@ async def fetch_models(
                     {"id": m["id"], "name": m.get("display_name", m["id"])}
                     for m in data.get("data", [])
                 ]
-                return {"models": sorted(models, key=lambda x: x["id"])}
+                return {"models": sorted(_filter_models_by_type(models, req.type), key=lambda x: x["id"])}
 
         elif provider in ("openai", "deepseek", "openrouter", "custom"):
             base = req.api_base.rstrip("/")
-            url = f"{base}/v1/models" if "/v1" not in base else f"{base}/models"
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
-                resp.raise_for_status()
-                data = _decode_json(resp)
-                models = [
-                    {"id": m["id"], "name": m.get("id", m["id"])}
-                    for m in data.get("data", [])
-                ]
-                return {"models": sorted(models, key=lambda x: x["id"])}
+            # Use provider-specific endpoint for listing embedding models
+            if req.type == "embedding" and provider in ("openai", "openrouter", "custom"):
+                embed_url = f"{base}/embeddings/models"
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(embed_url, headers={"Authorization": f"Bearer {api_key}"})
+                    if resp.status_code == 404:
+                        url = f"{base}/v1/models" if "/v1" not in base else f"{base}/models"
+                        resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                    resp.raise_for_status()
+                    data = _decode_json(resp)
+                    models = [
+                        {"id": m["id"], "name": m.get("id", m["id"])}
+                        for m in data.get("data", [])
+                    ]
+                    return {"models": sorted(models, key=lambda x: x["id"])}
+            else:
+                url = f"{base}/v1/models" if "/v1" not in base else f"{base}/models"
+                async with httpx.AsyncClient(timeout=15) as client:
+                    resp = await client.get(url, headers={"Authorization": f"Bearer {api_key}"})
+                    resp.raise_for_status()
+                    data = _decode_json(resp)
+                    models = [
+                        {"id": m["id"], "name": m.get("id", m["id"])}
+                        for m in data.get("data", [])
+                    ]
+                    return {"models": sorted(models, key=lambda x: x["id"])}
 
         elif provider == "ollama":
             base = req.api_base.rstrip("/")
@@ -277,17 +302,19 @@ async def fetch_models(
                     {"id": m["name"], "name": m["name"]}
                     for m in data.get("models", [])
                 ]
-                return {"models": sorted(models, key=lambda x: x["id"])}
+                return {"models": sorted(_filter_models_by_type(models, req.type), key=lambda x: x["id"])}
 
         else:
             raise HTTPException(status_code=400, detail=f"不支持的提供商: {provider}")
 
     except httpx.HTTPStatusError as e:
-        body = e.response.text[:300] if e.response else ""
-        raise HTTPException(status_code=502, detail=f"API 请求失败 ({e.response.status_code}): {body}")
-    except httpx.RequestError as e:
-        raise HTTPException(status_code=502, detail=f"无法连接到 API: {str(e)[:200]}")
-    except UnicodeEncodeError as e:
-        raise HTTPException(status_code=502, detail=f"API 返回编码异常: {str(e)[:200]}")
+        logger.warning("fetch models HTTP %s for %s: %.200s", e.response.status_code, provider, e.response.text)
+        raise HTTPException(status_code=502, detail=f"API 请求失败 ({e.response.status_code})")
+    except httpx.RequestError:
+        logger.warning("fetch models connection failed: %s", provider)
+        raise HTTPException(status_code=502, detail="无法连接到 API 服务")
+    except UnicodeEncodeError:
+        raise HTTPException(status_code=502, detail="API 返回编码异常")
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"获取模型列表失败: {str(e)[:200]}")
+        logger.warning("fetch models error: %s", e)
+        raise HTTPException(status_code=500, detail="获取模型列表失败，请稍后重试")

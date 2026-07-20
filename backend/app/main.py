@@ -18,14 +18,10 @@ from app.routes.agent_config import router as agent_config_router
 async def _reindex_registry():
     """Re-index documents from registry into Milvus if missing."""
     registry_path = os.path.join(settings.upload_dir, "registry.json")
-    if not os.path.exists(registry_path):
-        return
-    import json
-    try:
-        with open(registry_path, "r", encoding="utf-8") as f:
-            entries = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return
+    loop = asyncio.get_running_loop()
+
+    entries = await loop.run_in_executor(None, _load_registry, registry_path)
+
     from app.document_processor import processor
     from app.vector_store import add_documents
     for entry in entries:
@@ -33,21 +29,43 @@ async def _reindex_registry():
         filename = entry.get("filename")
         if not doc_id or not filename:
             continue
-        file_path = os.path.join(settings.upload_dir, f"{doc_id}.{filename.rsplit('.', 1)[-1]}")
-        if not os.path.exists(file_path):
-            continue
-        try:
-            documents = processor.process_file(file_path, filename, doc_id=doc_id)
-            add_documents(documents)
-        except Exception:
-            pass
+        ext = filename.rsplit(".", 1)[-1] if "." in filename else ""
+        file_path = os.path.join(settings.upload_dir, f"{doc_id}.{ext}" if ext else doc_id)
+        await loop.run_in_executor(None, _reindex_one, file_path, filename, doc_id, processor, add_documents)
+
+
+def _load_registry(registry_path: str) -> list:
+    import json
+    if not os.path.exists(registry_path):
+        return []
+    try:
+        with open(registry_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def _reindex_one(file_path: str, filename: str, doc_id: str, processor, add_documents):
+    import os
+    if not os.path.exists(file_path):
+        return
+    try:
+        documents = processor.process_file(file_path, filename, doc_id=doc_id)
+        add_documents(documents)
+    except Exception:
+        pass
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     from app.redis_client import close_redis
+    loop = asyncio.get_running_loop()
     await init_db()
     await init_admin()
+    avatar_dir = os.path.join(os.path.dirname(__file__), "..", "data", "avatars")
+    await loop.run_in_executor(None, os.makedirs, avatar_dir, 0o755, True)
+    from fastapi.staticfiles import StaticFiles
+    app.mount("/api/files/avatars", StaticFiles(directory=avatar_dir), name="avatars")
     await _reindex_registry()
     yield
     await close_redis()
@@ -74,11 +92,6 @@ app.include_router(auth_router)
 app.include_router(chat_router)
 app.include_router(documents_router)
 app.include_router(agent_config_router)
-
-import os
-avatar_dir = os.path.join(os.path.dirname(__file__), "..", "data", "avatars")
-os.makedirs(avatar_dir, exist_ok=True)
-app.mount("/api/files/avatars", StaticFiles(directory=avatar_dir), name="avatars")
 
 
 @app.get("/")

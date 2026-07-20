@@ -278,7 +278,12 @@ async def batch_import_file(
     admin_user: dict = Depends(_require_perm("users.import")),
     db: AsyncSession = Depends(get_db),
 ):
-    content = (await file.read()).decode("utf-8", errors="replace")
+    if file.size and file.size > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="导入文件不能超过 10MB")
+    raw = await file.read()
+    if len(raw) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="导入文件不能超过 10MB")
+    content = raw.decode("utf-8", errors="replace")
     lines = [l.strip() for l in content.replace("\r\n", "\n").split("\n") if l.strip()]
     from app.auth import create_user as _create, check_employee_ids as _check
     existing = await _check(db, lines)
@@ -384,20 +389,30 @@ async def upload_avatar(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    import os, uuid, shutil
+    import os, asyncio
+    if file.size and file.size > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="头像文件不能超过 5MB")
     upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "avatars")
-    os.makedirs(upload_dir, exist_ok=True)
     ext = os.path.splitext(file.filename or ".png")[1].lower()
     if ext not in (".png", ".jpg", ".jpeg", ".gif", ".webp"):
         raise HTTPException(status_code=400, detail="不支持的图片格式")
     filename = f"{current_user['user_id']}{ext}"
     file_path = os.path.join(upload_dir, filename)
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    raw_data = await file.read()
+    if len(raw_data) > 5 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="头像文件不能超过 5MB")
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, _save_avatar, upload_dir, file_path, raw_data)
     avatar_url = f"/api/files/avatars/{filename}"
     from app.auth import update_user as _update
     await _update(db, current_user["user_id"], avatar_url=avatar_url)
     return {"url": avatar_url, "status": "ok"}
+
+
+def _save_avatar(upload_dir: str, file_path: str, raw_data: bytes):
+    os.makedirs(upload_dir, exist_ok=True)
+    with open(file_path, "wb") as f:
+        f.write(raw_data)
 
 
 @router.get("/users/{user_id}/stats")

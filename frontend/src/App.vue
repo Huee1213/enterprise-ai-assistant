@@ -33,6 +33,10 @@ onMounted(async () => {
   await auth.init()
 
   unsubBeforeEach = router.beforeEach((to, from) => {
+    if (to.path === '/login' || from.path === '/login') {
+      routeTransitionMsg.value = ''
+      return
+    }
     const fromAdmin = from.path.startsWith('/admin')
     const toAdmin = to.path.startsWith('/admin')
     if (fromAdmin && !toAdmin) routeTransitionMsg.value = '正在进入对话页面'

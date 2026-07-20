@@ -1,12 +1,16 @@
 import os
 import uuid
 import shutil
+import asyncio
+import logging
 from datetime import datetime
 from typing import List
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
 from app.models import DocumentInfo, UploadResponse, BulkUploadResponse
+
+logger = logging.getLogger(__name__)
 from app.config import settings
 from app.document_processor import processor
 from app.vector_store import add_documents, get_vector_store
@@ -58,9 +62,18 @@ class DocDetailResponse(BaseModel):
     chunks: List[ChunkInfo]
 
 
+def _safe_path(doc_id: str, filename: str) -> str:
+    """Return a validated file path inside upload_dir, preventing path traversal."""
+    safe_doc_id = os.path.basename(doc_id.replace("/", "").replace("\\", ""))
+    ext = os.path.splitext(os.path.basename(filename))[1]
+    full = os.path.normpath(os.path.join(settings.upload_dir, f"{safe_doc_id}{ext}"))
+    if not full.startswith(os.path.normpath(settings.upload_dir)):
+        raise ValueError("Path traversal detected")
+    return full
+
+
 def _get_file_path(doc_id: str, filename: str) -> str:
-    ext = os.path.splitext(filename)[1]
-    return os.path.join(settings.upload_dir, f"{doc_id}{ext}")
+    return _safe_path(doc_id, filename)
 
 
 def _read_original_content(doc_id: str, filename: str) -> str:
@@ -82,28 +95,43 @@ async def upload_document(file: UploadFile = File(...), admin_user: dict = Depen
     doc_id = str(uuid.uuid4())
     safe_name = f"{doc_id}{ext}"
     file_path = os.path.join(settings.upload_dir, safe_name)
-    os.makedirs(settings.upload_dir, exist_ok=True)
 
     file.file.seek(0, 2)
     file_size = file.file.tell()
     file.file.seek(0)
 
-    with open(file_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
+    if file_size > 100 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="文件大小不能超过 100MB")
+
+    raw_data = file.file.read()
 
     try:
-        documents = processor.process_file(file_path, file.filename or safe_name, doc_id=doc_id)
-        ids = add_documents(documents)
-        chunk_texts = [d.page_content for d in documents]
-        cc = len(chunk_texts)
-
-        register_document(doc_id=doc_id, filename=file.filename or safe_name, size=file_size, content_type=ext.lstrip("."), chunk_count=cc, chunk_texts=chunk_texts)
-
-        return UploadResponse(id=doc_id, filename=file.filename or safe_name, status="success", message=f"已处理 {cc} 个文本块: {file.filename}")
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _sync_process, file_path, file.filename, safe_name, doc_id, file_size, raw_data)
+        return result
+    except HTTPException:
+        raise
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail="文档处理失败，请稍后重试")
+
+
+def _sync_process(file_path: str, filename: str, safe_name: str, doc_id: str, file_size: int, raw_data: bytes = None) -> UploadResponse:
+    """Run document processing synchronously (offloaded to thread pool)."""
+    os.makedirs(os.path.dirname(file_path) or ".", exist_ok=True)
+    if raw_data is not None:
+        with open(file_path, "wb") as f:
+            f.write(raw_data)
+    documents = processor.process_file(file_path, filename or safe_name, doc_id=doc_id)
+    ids = add_documents(documents)
+    chunk_texts = [d.page_content for d in documents]
+    cc = len(chunk_texts)
+    register_document(doc_id=doc_id, filename=filename or safe_name, size=file_size,
+                      content_type=os.path.splitext(safe_name)[1].lstrip("."),
+                      chunk_count=cc, chunk_texts=chunk_texts)
+    return UploadResponse(id=doc_id, filename=filename or safe_name, status="success",
+                          message=f"已处理 {cc} 个文本块: {filename}")
 
 
 async def _process_and_register(file: UploadFile) -> UploadResponse:
@@ -115,7 +143,6 @@ async def _process_and_register(file: UploadFile) -> UploadResponse:
     doc_id = str(uuid.uuid4())
     safe_name = f"{doc_id}{ext}"
     file_path = os.path.join(settings.upload_dir, safe_name)
-    os.makedirs(settings.upload_dir, exist_ok=True)
 
     try:
         file.file.seek(0, 2)
@@ -124,21 +151,16 @@ async def _process_and_register(file: UploadFile) -> UploadResponse:
     except Exception:
         file_size = 0
 
-    with open(file_path, "wb") as f:
-        file.file.seek(0)
-        shutil.copyfileobj(file.file, f)
+    raw_data = file.file.read()
 
     try:
-        documents = processor.process_file(file_path, file.filename or safe_name, doc_id=doc_id)
-        ids = add_documents(documents)
-        chunk_texts = [d.page_content for d in documents]
-        cc = len(chunk_texts)
-        register_document(doc_id=doc_id, filename=file.filename or safe_name, size=file_size, content_type=ext.lstrip("."), chunk_count=cc, chunk_texts=chunk_texts)
-        return UploadResponse(id=doc_id, filename=file.filename or safe_name, status="success", message=f"已处理 {cc} 个文本块")
+        loop = asyncio.get_running_loop()
+        result = await loop.run_in_executor(None, _sync_process, file_path, file.filename, safe_name, doc_id, file_size, raw_data)
+        return result
     except Exception as e:
         if os.path.exists(file_path):
             os.remove(file_path)
-        return UploadResponse(id="", filename=file.filename or safe_name, status="error", message=str(e)[:100])
+        return UploadResponse(id="", filename=file.filename or safe_name, status="error", message=f"文件 {file.filename} 处理失败")
 
 
 @router.post("/upload-bulk", response_model=BulkUploadResponse)
@@ -157,7 +179,8 @@ async def list_documents_route(admin_user: dict = Depends(_require_doc_perm("doc
     try:
         return list_documents()
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("list documents failed: %s", e)
+        raise HTTPException(status_code=500, detail="获取文档列表失败")
 
 
 @router.get("/{doc_id}", response_model=DocDetailResponse)
@@ -170,18 +193,16 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_d
     original = _read_original_content(doc_id, doc.filename)
 
     chunks = []
+    loop = asyncio.get_running_loop()
     try:
-        import json as _json
         registry_path = os.path.join(settings.upload_dir, "registry.json")
-        if os.path.exists(registry_path):
-            with open(registry_path, "r", encoding="utf-8") as f:
-                entries = _json.load(f)
+        entries = await loop.run_in_executor(None, _load_registry_entries, registry_path)
+        if entries:
             for entry in entries:
                 if entry["id"] == doc_id:
                     chunks_meta = entry.get("chunks", [])
                     if chunks_meta:
-                        for c in chunks_meta:
-                            chunks.append(ChunkInfo(index=c["index"], content=c["content"], source=doc.filename, doc_id=doc_id))
+                        chunks = [ChunkInfo(index=c["index"], content=c["content"], source=doc.filename, doc_id=doc_id) for c in chunks_meta]
                         break
     except Exception:
         pass
@@ -189,7 +210,7 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_d
     if not chunks:
         try:
             from app.vector_store import similarity_search
-            results = similarity_search("document content", k=100)
+            results = await loop.run_in_executor(None, lambda: similarity_search("document content", k=100))
             seen = set()
             for r in results:
                 if r.metadata.get("doc_id") == doc_id and r.page_content not in seen:
@@ -203,9 +224,9 @@ async def get_document_detail(doc_id: str, admin_user: dict = Depends(_require_d
     if not chunks:
         try:
             file_path = _get_file_path(doc_id, doc.filename)
-            if os.path.exists(file_path):
+            if file_path and await loop.run_in_executor(None, os.path.exists, file_path):
                 from app.document_processor import processor as doc_proc
-                docs = doc_proc.process_file(file_path, doc.filename)
+                docs = await loop.run_in_executor(None, doc_proc.process_file, file_path, doc.filename)
                 for i, d in enumerate(docs):
                     chunks.append(ChunkInfo(index=i, content=d.page_content, source=doc.filename, doc_id=doc_id))
         except Exception:
@@ -239,11 +260,12 @@ async def get_document_file(
 async def delete_document_route(doc_id: str, admin_user: dict = Depends(_require_doc_perm("documents.delete"))):
     try:
         from app.vector_store import delete_document as vector_delete
-        vector_delete(doc_id)
-        registry_delete(doc_id)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: (vector_delete(doc_id), registry_delete(doc_id)))
         return {"status": "deleted", "id": doc_id}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("delete document %s failed: %s", doc_id, e)
+        raise HTTPException(status_code=500, detail="删除文档失败")
 
 
 @router.post("/batch-delete", response_model=dict)
@@ -253,9 +275,24 @@ async def batch_delete_documents_route(body: dict, admin_user: dict = Depends(_r
         doc_ids: list = body.get("ids", [])
         if not doc_ids:
             return {"status": "ok", "deleted": 0}
-        vector_batch_delete(doc_ids)
-        for doc_id in doc_ids:
-            registry_delete(doc_id)
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, lambda: (_batch_delete_all(doc_ids, vector_batch_delete)))
         return {"status": "ok", "deleted": len(doc_ids)}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.warning("batch delete documents failed: %s", e)
+        raise HTTPException(status_code=500, detail="批量删除文档失败")
+
+
+def _batch_delete_all(doc_ids: list, vector_batch_delete):
+    from app.document_registry import delete_document as registry_delete
+    vector_batch_delete(doc_ids)
+    for doc_id in doc_ids:
+        registry_delete(doc_id)
+
+
+def _load_registry_entries(registry_path: str) -> list:
+    import json
+    if os.path.exists(registry_path):
+        with open(registry_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []

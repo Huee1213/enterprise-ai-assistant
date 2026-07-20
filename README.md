@@ -25,6 +25,7 @@
 - **📱 响应式布局** — 桌面端侧栏可缩边（仅图标），移动端滑出式侧栏 + Agent 面板
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
+- **🔒 安全加固** — JWT 密钥必需环境变量；密码哈希与 JWT 密钥解耦；路径遍历防护；文件上传大小限制（文档 100MB / 头像 5MB）；异常信息防泄漏；异步线程池卸载阻塞操作
 
 ---
 
@@ -247,7 +248,8 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `EMBEDDING_MODEL` | `local/BAAI/bge-small-en-v1.5` | 向量化模型 |
 | `EMBEDDING_API_KEY` | — | 嵌入 API 密钥（远程模式） |
 | `LLM_PROVIDER` | `openai` | 默认 LLM 供应商 |
-| `JWT_SECRET_KEY` | *(内置默认值)* | JWT 签名密钥 |
+| `JWT_SECRET_KEY` | **必需** | JWT 签名密钥（`openssl rand -hex 32` 生成） |
+| `PASSWORD_SALT` | `enterprise-ai-password-salt-v1` | 密码哈希固定盐值 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `MILVUS_URI` | `http://milvus:19530` | Milvus 连接地址 |
 | `SEARXNG_URL` | `http://searxng:8080` | SearXNG 搜索地址 |
@@ -267,7 +269,8 @@ curl -X POST http://localhost:8000/api/chat/simple \
 │  · 员工工作台 │     └──────────────┘     │  · JWT 认证              │
 │  · 管理后台   │                           │  · LangGraph Agent       │
 │  · 登录      │                           │  · 长短期记忆             │
-└──────────────┘                           │  · 文档管理   │                           │  · 智能体配置管理          │
+│  · 文档管理   │                           │  · 文档管理               │
+└──────────────┘                           │  · 智能体配置管理          │
                                            └──────────┬──────────────┘
                                                       │
              ┌────────────────────────────────────────┼───────────────────────┐

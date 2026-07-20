@@ -53,10 +53,11 @@ async def call_model(state: MessagesState) -> dict:
         response = await llm.ainvoke(msgs)
     except Exception as e:
         err = str(e)
+        logger.warning("LLM call error: %.200s", err)
         if "ResourceExhausted" in err or "rate limit" in err.lower():
             response = AIMessage(content="抱歉，API 请求过于频繁，请稍后再试。")
         else:
-            response = AIMessage(content=f"抱歉，处理请求时出现错误：{err[:100]}")
+            response = AIMessage(content="抱歉，处理请求时出现错误，请稍后重试。")
     return {"messages": [response]}
 
 
@@ -115,7 +116,8 @@ async def stream_rag(query: str, memory_context: str = "",
     try:
         from app.vector_store import similarity_search
         temp_llm = _get_full_llm()
-        docs = similarity_search(query, k=settings.top_k)
+        loop = asyncio.get_running_loop()
+        docs = await loop.run_in_executor(None, similarity_search, query, settings.top_k)
         context = "\n\n".join(
             f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
         ) if docs else "No relevant documents found."
@@ -221,7 +223,8 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
 async def run_rag(query: str, memory_context: str = "") -> dict:
     from app.vector_store import similarity_search
     temp_llm = _get_llm()
-    docs = similarity_search(query, k=settings.top_k)
+    loop = asyncio.get_running_loop()
+    docs = await loop.run_in_executor(None, similarity_search, query, settings.top_k)
     context = "\n\n".join(
         f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
     ) if docs else "No relevant documents found."

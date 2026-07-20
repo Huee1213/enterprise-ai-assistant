@@ -1,6 +1,5 @@
 import json
-import urllib.request
-import urllib.parse
+import asyncio
 from typing import List, Type
 from langchain_core.tools import BaseTool
 from langchain_core.documents import Document
@@ -14,24 +13,23 @@ class KnowledgeSearchInput(BaseModel):
 
 class KnowledgeSearchTool(BaseTool):
     name: str = "knowledge_search"
-    description: str = "Search the enterprise knowledge base for relevant information. Use this when you need to answer questions based on uploaded documents."
+    description: str = "Search the enterprise knowledge base for relevant information."
     args_schema: Type[BaseModel] = KnowledgeSearchInput
 
     def _run(self, query: str) -> str:
         docs: List[Document] = similarity_search(query, k=5)
         if not docs:
             return "No relevant documents found in the knowledge base."
-
         results = []
         for i, doc in enumerate(docs):
             source = doc.metadata.get("source", "Unknown")
             content = doc.page_content[:500]
             results.append(f"[Source {i+1}] ({source}):\n{content}")
-
         return "\n\n---\n\n".join(results)
 
     async def _arun(self, query: str) -> str:
-        return self._run(query)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._run, query)
 
 
 class WebSearchInput(BaseModel):
@@ -40,16 +38,15 @@ class WebSearchInput(BaseModel):
 
 class WebSearchTool(BaseTool):
     name: str = "web_search"
-    description: str = "Search the web for real-time information. Use this when you need current events, recent updates, or topics not covered in the knowledge base."
+    description: str = "Search the web for real-time information."
     args_schema: Type[BaseModel] = WebSearchInput
-
-    def _get_searxng_url(self) -> str:
-        import os
-        return os.environ.get("SEARXNG_URL", "http://searxng:8080")
 
     def _run(self, query: str) -> str:
         try:
-            searxng_url = self._get_searxng_url()
+            import os
+            import urllib.request
+            import urllib.parse
+            searxng_url = os.environ.get("SEARXNG_URL", "http://searxng:8080")
             params = urllib.parse.urlencode({"q": query, "format": "json"})
             req = urllib.request.Request(f"{searxng_url}/search?{params}",
                 headers={"User-Agent": "Enterprise-AI-Assistant/1.0"})
@@ -76,7 +73,8 @@ class WebSearchTool(BaseTool):
             return f"Web search error: {str(e)}"
 
     async def _arun(self, query: str) -> str:
-        return self._run(query)
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._run, query)
 
 
 class SummarizeInput(BaseModel):
@@ -85,12 +83,13 @@ class SummarizeInput(BaseModel):
 
 class SummarizeTool(BaseTool):
     name: str = "summarize"
-    description: str = "Summarize a given text. Use this when you need to condense long documents or conversation history."
+    description: str = "Summarize a given text."
     args_schema: Type[BaseModel] = SummarizeInput
 
     def _run(self, text: str) -> str:
         try:
             from langchain_openai import ChatOpenAI
+            from langchain_core.messages import HumanMessage
             from app.config import settings
             llm = ChatOpenAI(
                 model=settings.llm_model,
@@ -99,16 +98,19 @@ class SummarizeTool(BaseTool):
                 api_key=settings.llm_api_key,
                 base_url=settings.llm_api_base,
             )
-            from langchain_core.messages import HumanMessage
             resp = llm.invoke([HumanMessage(content=f"Summarize the following text concisely:\n\n{text[:3000]}")])
             return resp.content
         except Exception as e:
             return f"Summary of text ({len(text)} chars):\n{text[:300]}..."
 
+    async def _arun(self, text: str) -> str:
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._run, text)
+
 
 class GetCurrentTimeTool(BaseTool):
     name: str = "get_current_time"
-    description: str = "Get the current date and time based on the server's deployment location. Use this when you need to know the current time, date, weekday, or timezone."
+    description: str = "Get the current date and time based on server timezone."
     args_schema: Type[BaseModel] = type("NoInput", (BaseModel,), {})
 
     def _run(self) -> str:
