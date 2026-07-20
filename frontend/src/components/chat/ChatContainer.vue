@@ -33,30 +33,18 @@ const filteredMatchIndices = computed(() => {
     .map(({ idx }) => idx)
 })
 
-// Messages to show as dots: only user messages (each user message = one conversation turn)
+// Messages to show as dots: only user messages
 const dotMessages = computed(() =>
   chat.messages.filter(m => m.role === 'user')
 )
 
-const dotIndices = computed(() => {
-  const msgs = chat.messages
-  const dots = dotMessages.value
-  const total = msgs.length
-  if (total === 0) return []
-  return dots.map(m => ({
-    msg: m,
-    idx: msgs.indexOf(m),
-    label: m.content.slice(0, 40) + (m.content.length > 40 ? '...' : ''),
-    pct: total > 1 ? (msgs.indexOf(m) / (total - 1)) * 100 : 50,
+const userMsgItems = computed(() =>
+  dotMessages.value.map(m => ({
+    id: m.id,
+    idx: chat.messages.indexOf(m),
+    label: m.content.slice(0, 48) + (m.content.length > 48 ? '...' : ''),
   }))
-})
-
-const activeDotPct = computed(() => {
-  const idx = activeDotIdx.value
-  const total = chat.messages.length
-  if (total <= 1) return 50
-  return (idx / (total - 1)) * 100
-})
+)
 
 function scrollToMsg(msgId: string) {
   const el = msgRefs.value.get(msgId)
@@ -287,41 +275,43 @@ defineExpose({ toggleSearch })
       </div>
     </div>
 
-    <!-- Right-side message navigation bar (DeepSeek-style) -->
-    <div v-if="dotIndices.length >= 2" class="absolute right-0 inset-y-0 z-10 flex items-center pointer-events-none">
-      <div class="relative h-3/5 w-8 flex flex-col items-center pointer-events-auto">
-        <!-- Vertical track -->
-        <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-muted-foreground/10 rounded-full" />
-        <!-- Active track fill -->
-        <div
-          class="absolute left-1/2 -translate-x-1/2 w-0.5 bg-primary/30 rounded-full transition-all duration-300"
-          :style="{ top: '0%', height: `${activeDotPct}%` }"
-        />
-        <!-- Dots -->
-        <div
-          v-for="(dot, di) in dotIndices"
-          :key="dot.msg.id"
-          @click="handleDotClick(dot.msg.id)"
-          class="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 group cursor-pointer z-10"
-          :style="{ top: `${dot.pct}%` }"
-        >
-          <!-- Click target (bigger than visible dot) -->
-          <div class="w-5 h-5 flex items-center justify-center">
-            <div
-              class="rounded-full transition-all duration-200"
-              :class="activeDotIdx === dot.idx
-                ? 'w-2.5 h-2.5 bg-primary shadow-sm shadow-primary/30'
-                : 'w-1.5 h-1.5 bg-muted-foreground/30 group-hover:bg-muted-foreground/50 group-hover:scale-125'"
-            />
-          </div>
-          <!-- Tooltip -->
-          <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center pointer-events-none">
-            <div class="bg-popover text-popover-foreground text-[11px] rounded-md px-2.5 py-1.5 shadow-lg border border-border whitespace-nowrap max-w-[220px] truncate leading-relaxed">
-              <span class="text-[10px] text-muted-foreground/60 mr-1">#{{ dot.idx + 1 }}</span>
-              {{ dot.label }}
+    <!-- Right-side message navigation bar -->
+    <div v-if="userMsgItems.length >= 2" class="absolute right-0 inset-y-0 z-10 flex items-center pointer-events-none">
+      <div class="relative w-8 h-3/5 flex items-center justify-center pointer-events-auto group/timeline">
+        <!-- Vertical strip with up to 6 segments -->
+        <div class="relative w-1.5 h-full rounded-full overflow-hidden bg-muted-foreground/10">
+          <div
+            v-for="(item, i) in userMsgItems.slice(0, 6)"
+            :key="item.id"
+            class="absolute left-0 w-full rounded-full transition-all duration-200"
+            :class="i < 5 ? 'bg-muted-foreground/20' : 'bg-muted-foreground/15'"
+            :style="{
+              top: `${(i / Math.min(userMsgItems.length, 6)) * 100}%`,
+              height: `${(1 / Math.min(userMsgItems.length, 6)) * 100}%`,
+            }"
+          />
+        </div>
+
+        <!-- Hover popup: scrollable message list -->
+        <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 hidden group-hover/timeline:flex flex-col pointer-events-auto">
+          <div class="bg-popover text-popover-foreground rounded-lg shadow-xl border border-border py-1.5 min-w-[200px] max-h-[320px] overflow-y-auto">
+            <div class="px-3 py-1.5 text-[10px] font-medium text-muted-foreground/60 border-b border-border/50 flex items-center justify-between">
+              <span>消息定位 ({{ userMsgItems.length }})</span>
+              <span class="text-[9px]">点击跳转</span>
             </div>
-            <div class="w-0 h-0 border-l-4 border-l-popover border-y-4 border-y-transparent" />
+            <div
+              v-for="(item, i) in userMsgItems"
+              :key="item.id"
+              @click="handleDotClick(item.id)"
+              class="flex items-start gap-2 px-3 py-2 cursor-pointer transition-colors hover:bg-muted/50 border-b border-border/30 last:border-0"
+              :class="activeDotIdx === item.idx ? 'bg-primary/5' : ''"
+            >
+              <span class="text-[10px] font-mono text-muted-foreground/40 mt-0.5 shrink-0 w-4 text-right">{{ i + 1 }}</span>
+              <span class="text-xs leading-relaxed line-clamp-2 break-words flex-1 min-w-0">{{ item.label }}</span>
+              <div v-if="activeDotIdx === item.idx" class="w-1.5 h-1.5 rounded-full bg-primary shrink-0 mt-1.5" />
+            </div>
           </div>
+          <div class="w-0 h-0 absolute -right-[5px] top-1/2 -translate-y-1/2 border-l-[5px] border-l-popover border-y-[5px] border-y-transparent" />
         </div>
       </div>
     </div>
