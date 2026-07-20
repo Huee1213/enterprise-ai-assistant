@@ -13,6 +13,7 @@ const props = defineProps<{
   isAdmin?: boolean
   selectMode?: boolean
   selected?: boolean
+  searchQuery?: string
 }>()
 
 const emit = defineEmits<{

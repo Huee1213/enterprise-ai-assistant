@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { regenerateConversationTitle } from '@/api/chat'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -11,6 +11,14 @@ const chat = useChatStore()
 const confirmingDelete = ref<string | null>(null)
 const regenerating = ref<string | null>(null)
 const rotatingTitles = ref<Set<string>>(new Set())
+const searchQuery = ref('')
+const isSearching = ref(false)
+
+const filteredConversations = computed(() => {
+  if (!searchQuery.value.trim()) return chat.conversations
+  const q = searchQuery.value.toLowerCase().trim()
+  return chat.conversations.filter(c => c.title.toLowerCase().includes(q))
+})
 
 function handleNewChat() {
   chat.createConversation(false)
@@ -19,6 +27,7 @@ function handleNewChat() {
 
 function handleSelect(id: string) {
   chat.selectConversation(id)
+  searchQuery.value = ''
 }
 
 async function handleRegenerateTitle(id: string, event: MouseEvent) {
@@ -73,11 +82,32 @@ function cancelDelete() {
       </button>
     </div>
 
+    <!-- Search input (not collapsed) -->
+    <div v-show="!collapsed" class="px-3 pt-2">
+      <div class="relative">
+        <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 pointer-events-none"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        <input
+          v-model="searchQuery"
+          type="text"
+          placeholder="搜索历史对话..."
+          class="w-full h-8 rounded-md bg-sidebar-muted/50 border border-border/50 pl-8 pr-2 text-xs text-sidebar-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/30 transition-all"
+        />
+        <button
+          v-if="searchQuery"
+          @click="searchQuery = ''"
+          class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
+      </div>
+    </div>
+
     <nav class="flex-1 overflow-y-auto p-2 relative" :class="collapsed ? 'px-1' : ''">
       <div v-if="chat.conversations.length === 0" class="text-center text-muted-foreground text-xs py-8" :class="collapsed ? 'hidden' : ''">暂无对话</div>
+      <div v-else-if="searchQuery && filteredConversations.length === 0" class="text-center text-muted-foreground text-xs py-8">未找到匹配对话</div>
       <div class="space-y-1" :class="collapsed ? 'flex flex-col items-center' : ''">
         <button
-          v-for="(conv, idx) in chat.conversations"
+          v-for="(conv, idx) in filteredConversations"
           :key="conv.id"
           @click="handleSelect(conv.id)"
           :style="{ animationDelay: `${Math.min(idx * 0.03, 0.3)}s` }"
@@ -89,7 +119,15 @@ function cancelDelete() {
           :title="collapsed ? conv.title : ''"
         >
           <svg v-show="collapsed" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          <span v-show="!collapsed" class="truncate text-left flex-1" :class="{ 'animate-pulse': regenerating === conv.id }">{{ conv.title }}</span>
+          <span v-show="!collapsed" class="truncate text-left flex-1" :class="{ 'animate-pulse': regenerating === conv.id }">
+            <span v-if="searchQuery">
+              <span v-for="(part, pi) in conv.title.split(new RegExp(`(${searchQuery.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi'))" :key="pi">
+                <mark v-if="part.toLowerCase() === searchQuery.toLowerCase()" class="bg-primary/20 text-sidebar-foreground rounded-sm px-0.5">{{ part }}</mark>
+                <template v-else>{{ part }}</template>
+              </span>
+            </span>
+            <template v-else>{{ conv.title }}</template>
+          </span>
           <button
             v-show="!collapsed"
             @click="handleRegenerateTitle(conv.id, $event)"

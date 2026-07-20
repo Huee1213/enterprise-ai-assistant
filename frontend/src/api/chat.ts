@@ -120,3 +120,8 @@ export async function bulkDeleteMessages(convId: string, msgDbIds: number[]): Pr
   await apiClient.post(`/chat/conversations/${convId}/messages/bulk-delete`, { message_ids: msgDbIds })
 }
 
+export async function searchMessages(convId: string, q: string): Promise<{ id: number; role: string; timestamp: string; snippet: string }[]> {
+  const { data } = await apiClient.get(`/chat/conversations/${convId}/search`, { params: { q } })
+  return data.matches || []
+}
+

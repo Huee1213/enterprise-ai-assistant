@@ -17,6 +17,8 @@
 - **🧠 长短期记忆系统** — PostgreSQL 持久化，偏好/事实/对话历史/自动摘要
 - **⚡ 实时流式输出** — SSE 逐 Token 流式传输 + Markdown 渲染 + 推理步骤实时可见
 - **📋 对话管理** — 单条消息删除+二次确认、重新生成、复制、编辑问题
+- **🔍 历史对话搜索** — 侧栏搜索框按标题过滤历史对话
+- **🎯 对话内搜索跳转** — Ctrl+F 搜索当前对话消息内容，上下逐条跳转，高亮定位
 - **📖 文档预览** — 原始内容(含 PDF 内联/DOCX 样式/CSV 表格) + 文本块详情
 - **🔎 Agent 调试面板** — 管理员可实时查看每步推理（LLM 调用、工具执行、输入输出）
 - **📱 响应式布局** — 桌面端侧栏可缩边（仅图标），移动端滑出式侧栏 + Agent 面板
@@ -211,6 +213,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `GET` | `/api/chat/conversations` | JWT | — | 对话列表 |
 | `GET` | `/api/chat/conversations/{id}` | JWT | — | 对话消息历史 |
 | `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
+| `GET` | `/api/chat/conversations/{id}/search?q=` | JWT | — | 搜索对话内消息
 | `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |
 | `POST` | `/api/chat/conversations/{id}/messages/bulk-delete` | JWT | — | 批量删除消息 |
 | `PUT` | `/api/chat/conversations/{id}/title` | JWT | — | 更新对话标题 |

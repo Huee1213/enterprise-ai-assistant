@@ -207,10 +207,14 @@ async def generate_title(request: TitleRequest, current_user: dict = Depends(get
 
 @router.get("/conversations")
 async def get_conversations(
+    search: str = "",
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     convs = await list_conversations(db, current_user["user_id"])
+    if search:
+        q = search.lower().strip()
+        convs = [c for c in convs if q in c.get("title", "").lower()]
     return {"conversations": convs}
 
 
@@ -222,6 +226,29 @@ async def get_conversation(
 ):
     msgs = await get_conversation_history(db, current_user["user_id"], conv_id)
     return {"conversation_id": conv_id, "messages": msgs}
+
+
+@router.get("/conversations/{conv_id}/search")
+async def search_conversation_messages(
+    conv_id: str,
+    q: str = "",
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    msgs = await get_conversation_history(db, current_user["user_id"], conv_id)
+    if not q:
+        return {"conversation_id": conv_id, "matches": [], "query": q}
+    query = q.lower().strip()
+    matches = []
+    for m in msgs:
+        if query in m["content"].lower():
+            matches.append({
+                "id": m["id"],
+                "role": m["role"],
+                "timestamp": m["timestamp"],
+                "snippet": m["content"][:100],
+            })
+    return {"conversation_id": conv_id, "matches": matches, "query": q}
 
 
 @router.delete("/conversations/{conv_id}")
