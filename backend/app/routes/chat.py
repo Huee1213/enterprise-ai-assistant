@@ -86,32 +86,37 @@ async def chat_stream(
         generator = stream_rag(request.message, memory_ctx, history_ctx=history_ctx, db=db, user_id=user_id, conv_id=conv_id)
 
     async def _post_stream_tasks(conv_id: str, user_msg: str, reply: str):
-        """Background: fact extraction + summary (runs after SSE stream ends)."""
+        """Background: fact extraction + summary (runs after SSE stream ends).
+        Uses its own DB session to avoid conflicts with the request-scoped session.
+        """
+        from app.database import AsyncSessionLocal
         try:
-            from langchain_openai import ChatOpenAI
-            from app.memory import generate_fact_from_message
-            fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-            fact = await generate_fact_from_message(fact_llm, user_msg, reply)
-            if fact:
-                await add_user_fact(db, user_id, fact)
+            async with AsyncSessionLocal() as bg_db:
+                from langchain_openai import ChatOpenAI
+                from app.memory import generate_fact_from_message
+                fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                fact = await generate_fact_from_message(fact_llm, user_msg, reply)
+                if fact:
+                    await add_user_fact(bg_db, user_id, fact)
         except Exception:
             pass
         try:
-            from langchain_core.messages import SystemMessage, HumanMessage
-            from langchain_openai import ChatOpenAI
-            shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=250, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-            hist = await get_conversation_history(db, user_id, conv_id)
-            existing = await get_conversation_summary(db, user_id, conv_id)
-            msg_count = len(hist)
-            if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
-                context_parts = []
-                if existing:
-                    context_parts.append(f"旧摘要: {existing}")
-                context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:300]}" for h in hist[-10:]))
-                resp = await shared_llm.ainvoke([SystemMessage(content="用50字以内概括这段对话，包含关键信息。"), HumanMessage(content="\n\n".join(context_parts))])
-                summary = resp.content.strip()[:150]
-                if summary:
-                    await add_conversation_summary(db, user_id, conv_id, summary)
+            async with AsyncSessionLocal() as bg_db:
+                from langchain_core.messages import SystemMessage, HumanMessage
+                from langchain_openai import ChatOpenAI
+                shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=500, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                hist = await get_conversation_history(bg_db, user_id, conv_id)
+                existing = await get_conversation_summary(bg_db, user_id, conv_id)
+                msg_count = len(hist)
+                if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
+                    context_parts = []
+                    if existing:
+                        context_parts.append(f"旧摘要: {existing}")
+                    context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:800]}" for h in hist[-10:]))
+                    resp = await shared_llm.ainvoke([SystemMessage(content="你是一个对话摘要生成器。根据以下的对话内容，生成一段简洁完整的对话摘要，涵盖关键问题和回答。只输出摘要内容本身，不要前缀、不要引号。"), HumanMessage(content="\n\n".join(context_parts))])
+                    summary = resp.content.strip().strip('"').strip("'")
+                    if summary and len(summary) > 5:
+                        await add_conversation_summary(bg_db, user_id, conv_id, summary)
         except Exception:
             pass
 

@@ -76,12 +76,23 @@ async def add_user_fact(db: AsyncSession, user_id: str, fact: str) -> None:
 
 
 async def generate_fact_from_message(llm, user_message: str, assistant_reply: str) -> str | None:
-    """Use LLM to extract a factual statement about the user from a conversation turn."""
+    """Use LLM to extract a factual statement about the user from a conversation turn.
+    
+    Only triggers when the user message suggests personal information keywords,
+    to avoid unnecessary LLM calls on every chat message.
+    """
+    user_lower = user_message.lower()
+    trigger_keywords = ["我叫", "我是", "我喜欢", "我的名字", "我今年", "我住在", "我的职业",
+                        "我在", "我工作", "我学", "我出生", "我来自",
+                        "remember", "my name", "i am", "i like", "i work", "i study",
+                        "i live", "i'm"]
+    if not any(kw in user_lower for kw in trigger_keywords):
+        return None
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
         prompt = (
-            "从下面的对话中提取关于用户的事实信息。如果对话中包含用户个人信息（如姓名、喜好、职业等），"
-            "请用一句话概括这个事实。如果不包含任何可提取的信息，请只输出'无'。\n\n"
+            "从下面的对话中提取关于用户的事实信息，用一句话概括。"
+            "只输出事实内容，不要输出任何其他文字。如果不包含可提取信息请只输出'无'。\n\n"
             f"用户: {user_message}\n助手: {assistant_reply}"
         )
         resp = await llm.ainvoke([
