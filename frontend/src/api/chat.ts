@@ -108,6 +108,10 @@ export async function clearConversationMessages(convId: string): Promise<void> {
   await apiClient.delete(`/chat/conversations/${convId}/messages`)
 }
 
+export async function deleteMessagesFrom(convId: string, msgDbId: number): Promise<void> {
+  await apiClient.delete(`/chat/conversations/${convId}/messages/from/${msgDbId}`)
+}
+
 export async function bulkDeleteConversations(convIds: string[]): Promise<void> {
   await apiClient.post('/chat/conversations/bulk-delete', { conversation_ids: convIds })
 }

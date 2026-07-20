@@ -288,7 +288,7 @@ async def list_user_summaries(db: AsyncSession, user_id: str, search: str = "", 
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
     q = q.order_by(desc(ConversationSummary.id)).limit(limit).offset(offset)
     rows = (await db.execute(q)).scalars().all()
-    items = [{"id": r.id, "summary": r.summary, "conv_id": r.conv_id, "timestamp": r.timestamp.isoformat()} for r in rows]
+    items = [{"id": r.id, "summary": r.summary, "conv_id": r.conv_id, "created_at": r.timestamp.isoformat(), "timestamp": r.timestamp.isoformat()} for r in rows]
     # Attach conversation titles
     conv_ids = list(set(r.conv_id for r in rows))
     if conv_ids:

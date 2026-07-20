@@ -24,14 +24,29 @@ class TitleResponse(BaseModel):
 
 
 def _get_llm():
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        # Try to load effective config; fall back to env settings
+        task = asyncio.ensure_future(_load_chat_cfg())
+        cfg = loop.run_until_complete(task)
+        model = cfg.get("llm_model", settings.llm_model)
+        temp = float(cfg.get("llm_temperature", settings.llm_temperature))
+        mt = int(cfg.get("llm_max_tokens", settings.llm_max_tokens))
+        key = cfg.get("llm_api_key", settings.llm_api_key) or settings.llm_api_key
+        base = cfg.get("llm_api_base", settings.llm_api_base) or settings.llm_api_base
+    except Exception:
+        model, temp, mt, key, base = settings.llm_model, settings.llm_temperature, settings.llm_max_tokens, settings.llm_api_key, settings.llm_api_base
     from langchain_openai import ChatOpenAI
-    return ChatOpenAI(
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_api_base,
-    )
+    return ChatOpenAI(model=model, temperature=temp, max_tokens=mt, api_key=key, base_url=base)
+
+
+async def _load_chat_cfg() -> dict:
+    try:
+        from app.runtime_config import get_effective_config
+        return await get_effective_config()
+    except Exception:
+        return {}
 
 
 @router.post("/stream")
@@ -309,6 +324,24 @@ async def delete_single_message(
     ))
     await db.commit()
     return {"status": "deleted", "message_id": msg_db_id}
+
+
+@router.delete("/conversations/{conv_id}/messages/from/{msg_db_id}")
+async def delete_messages_from(
+    conv_id: str,
+    msg_db_id: int,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete the specified message and all later messages in the conversation."""
+    from sqlalchemy import delete as sql_delete, and_
+    await db.execute(sql_delete(ConversationHistory).where(
+        ConversationHistory.user_id == current_user["user_id"],
+        ConversationHistory.conversation_id == conv_id,
+        ConversationHistory.id >= msg_db_id,
+    ))
+    await db.commit()
+    return {"status": "deleted", "from_id": msg_db_id}
 
 
 class BulkMsgDeleteRequest(BaseModel):

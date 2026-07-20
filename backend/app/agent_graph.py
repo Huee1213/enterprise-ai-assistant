@@ -10,6 +10,7 @@ Uses LangChain's component architecture:
 import json
 import asyncio
 import logging
+import time
 from typing import AsyncGenerator
 
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
@@ -23,26 +24,52 @@ from app.tools import get_tools
 
 logger = logging.getLogger(__name__)
 
+# ── Runtime config cache ────────────────────────────────────────────────────
+_effective_config: dict = {}
+_config_loaded_at: float = 0
+_CONFIG_TTL = 30  # seconds
 
-def _get_llm():
+
+async def _load_effective_config() -> dict:
+    """Load effective config (env defaults + DB overrides), cached for TTL seconds."""
+    global _effective_config, _config_loaded_at
+    now = time.monotonic()
+    if _effective_config and (now - _config_loaded_at) < _CONFIG_TTL:
+        return _effective_config
+    try:
+        from app.runtime_config import get_effective_config
+        _effective_config = await get_effective_config()
+    except Exception:
+        _effective_config = {}
+    _config_loaded_at = now
+    return _effective_config
+
+
+def _get_llm_cfg(cfg: dict):
     return ChatOpenAI(
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_api_base,
+        model=cfg.get("llm_model", settings.llm_model),
+        temperature=float(cfg.get("llm_temperature", settings.llm_temperature)),
+        max_tokens=int(cfg.get("llm_max_tokens", settings.llm_max_tokens)),
+        api_key=cfg.get("llm_api_key", settings.llm_api_key) or settings.llm_api_key,
+        base_url=cfg.get("llm_api_base", settings.llm_api_base) or settings.llm_api_base,
     )
+
+
+def _get_llm_full_cfg(cfg: dict):
+    """LLM with reasoning extraction support."""
+    return _get_llm_cfg(cfg)
 
 
 tools: list[BaseTool] = get_tools()
 tool_node = ToolNode(tools)
-llm = _get_llm().bind_tools(tools)
 
 
 # ── Graph nodes ────────────────────────────────────────────────────────────
 
 
 async def call_model(state: MessagesState) -> dict:
+    llm_cfg = await _load_effective_config()
+    llm = _get_llm_cfg(llm_cfg).bind_tools(tools)
     system = SystemMessage(
         content="You are an enterprise AI knowledge assistant. "
                 "Answer questions using the knowledge base when relevant. "
@@ -99,25 +126,15 @@ def _emit_reasoning(chunk) -> str:
     return getattr(chunk, "reasoning_content", "") or ""
 
 
-def _get_full_llm():
-    """LLM with reasoning extraction support."""
-    return ChatOpenAI(
-        model=settings.llm_model,
-        temperature=settings.llm_temperature,
-        max_tokens=settings.llm_max_tokens,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_api_base,
-    )
-
-
 async def stream_rag(query: str, memory_context: str = "",
                      history_ctx: str = "", db=None, user_id: str = "",
                      conv_id: str = "") -> AsyncGenerator[str, None]:
     try:
+        cfg = await _load_effective_config()
         from app.vector_store import similarity_search
-        temp_llm = _get_full_llm()
+        temp_llm = _get_llm_full_cfg(cfg)
         loop = asyncio.get_running_loop()
-        docs = await loop.run_in_executor(None, similarity_search, query, settings.top_k)
+        docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
         context = "\n\n".join(
             f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
         ) if docs else "No relevant documents found."
@@ -221,10 +238,11 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
 
 
 async def run_rag(query: str, memory_context: str = "") -> dict:
+    cfg = await _load_effective_config()
     from app.vector_store import similarity_search
-    temp_llm = _get_llm()
+    temp_llm = _get_llm_cfg(cfg)
     loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, similarity_search, query, settings.top_k)
+    docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
     context = "\n\n".join(
         f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
     ) if docs else "No relevant documents found."

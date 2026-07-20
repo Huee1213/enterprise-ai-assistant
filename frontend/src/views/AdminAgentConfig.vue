@@ -39,6 +39,9 @@ const embModelOpen = ref(false)
 const embModelSearch = ref('')
 const embOriginalKey = ref('')
 
+// Track the true env defaults (never overridden) for reset button
+const envDefaults = ref<Record<string, any>>({})
+
 // Sync provider refs → config so diffCount detects changes
 watch(llmApiKey, (v) => { config.value.llm_api_key = v })
 watch(llmApiBase, (v) => { config.value.llm_api_base = v })
@@ -64,9 +67,10 @@ const filteredEmbModels = computed(() => {
 const diffCount = computed(() => {
   let n = 0
   for (const k of Object.keys(defaults.value)) {
+    // Skip masked key fields — dots length differs between .env and DB
+    if (k === 'llm_api_key' || k === 'embedding_api_key') continue
     const v = config.value[k]
     if (k in config.value && v !== defaults.value[k]) {
-      // Don't count empty fields as modified
       if (v === '' || v === null || v === undefined) continue
       n++
     }
@@ -74,7 +78,25 @@ const diffCount = computed(() => {
   return n
 })
 
+const canReset = computed(() => {
+  for (const k of Object.keys(envDefaults.value)) {
+    if (k === 'llm_api_key' || k === 'embedding_api_key') continue
+    const v = config.value[k]
+    if (k in config.value && v !== envDefaults.value[k]) {
+      if (v === '' || v === null || v === undefined) continue
+      return true
+    }
+  }
+  return false
+})
+
+const hasKeyEdit = computed(() => {
+  return (keyEditing && llmApiKey.value && !llmApiKey.value.includes('•')) ||
+         (embKeyEditing && embApiKey.value && !embApiKey.value.includes('•'))
+})
+
 function isModified(key: string): boolean {
+  if (key === 'llm_api_key' || key === 'embedding_api_key') return false
   if (!(key in defaults.value)) return false
   const v = config.value[key]
   if (v === '' || v === null || v === undefined) return false
@@ -91,7 +113,7 @@ async function loadConfig() {
   try {
     const resp = await apiClient.get('/agent/config')
     config.value = resp.data.config
-    defaults.value = resp.data.defaults
+    envDefaults.value = resp.data.defaults || {}
     llmProvider.value = config.value.llm_provider || 'openai'
     llmApiKey.value = config.value.llm_api_key || ''
     llmApiBase.value = config.value.llm_api_base || ''
@@ -117,6 +139,8 @@ async function loadConfig() {
     toastMsg('加载配置失败', 'error')
   }
   loading.value = false
+  // Use config as baseline for diff tracking
+  defaults.value = { ...config.value }
   // Auto-fetch only on initial load if we already have actual credentials
   if (prevApiKey.value && !prevApiKey.value.includes('••••') && llmApiBase.value) fetchModels()
 }
@@ -331,6 +355,33 @@ function revertOnBlur(e: FocusEvent) {
   }
 }
 
+async function reloadConfig() {
+  try {
+    const resp = await apiClient.get('/agent/config')
+    config.value = resp.data.config
+    llmProvider.value = config.value.llm_provider || 'openai'
+    llmApiKey.value = config.value.llm_api_key || ''
+    llmApiBase.value = config.value.llm_api_base || ''
+    modelSearch.value = config.value.llm_model || ''
+    if (llmApiKey.value.includes('••••')) keyEditing.value = false
+    else keyEditing.value = !llmApiKey.value
+    prevApiKey.value = llmApiKey.value
+    embProvider.value = config.value.embedding_provider || 'local'
+    if (embProvider.value === 'same-as-llm') {
+      embApiBase.value = llmApiBase.value
+      embApiKey.value = llmApiKey.value
+    } else {
+      embApiKey.value = config.value.embedding_api_key || ''
+      embApiBase.value = config.value.embedding_api_base || ''
+    }
+    embModelSearch.value = config.value.embedding_model || ''
+    if (embApiKey.value.includes('••••')) embKeyEditing.value = false
+    else embKeyEditing.value = !embApiKey.value
+    embOriginalKey.value = embApiKey.value
+  } catch {}
+  defaults.value = { ...config.value }
+}
+
 async function saveConfig() {
   saving.value = true
   config.value.llm_provider = llmProvider.value
@@ -354,31 +405,12 @@ async function saveConfig() {
     diff.embedding_provider = embProvider.value
 
     const resp = await apiClient.put('/agent/config', { config: diff })
-    config.value = resp.data.config
-    defaults.value = { ...resp.data.config }
-    // After save, revert key to masked — no way to view it again
-    keyEditing.value = false
-    keyVisible.value = false
-    if (config.value.llm_api_key && config.value.llm_api_key.includes('••••')) {
-      llmApiKey.value = config.value.llm_api_key
-    } else {
-      llmApiKey.value = config.value.llm_api_key || ''
-    }
-    prevApiKey.value = llmApiKey.value
-    // Embedding post-save
-    embKeyEditing.value = false
-    embKeyVisible.value = false
-    if (config.value.embedding_api_key && config.value.embedding_api_key.includes('••••')) {
-      embApiKey.value = config.value.embedding_api_key
-    } else {
-      embApiKey.value = config.value.embedding_api_key || ''
-    }
-    embOriginalKey.value = embApiKey.value
     toastMsg('配置已保存', 'success')
   } catch (err: any) {
     toastMsg(err.response?.data?.detail || '保存失败', 'error')
   }
   saving.value = false
+  await reloadConfig()
 }
 
 async function resetConfig() {
@@ -390,17 +422,23 @@ async function resetConfig() {
     llmProvider.value = config.value.llm_provider || 'openai'
     llmApiKey.value = config.value.llm_api_key || ''
     llmApiBase.value = config.value.llm_api_base || ''
+    modelSearch.value = config.value.llm_model || ''
     fetchedModels.value = []
+    keyEditing.value = false
+    keyVisible.value = false
     embProvider.value = config.value.embedding_provider || 'local'
     embApiKey.value = config.value.embedding_api_key || ''
     embApiBase.value = config.value.embedding_api_base || ''
     embModelSearch.value = config.value.embedding_model || ''
     embFetchedModels.value = []
+    embKeyEditing.value = false
+    embKeyVisible.value = false
     toastMsg('已恢复默认配置', 'success')
   } catch (err: any) {
     toastMsg(err.response?.data?.detail || '重置失败', 'error')
   }
   resetting.value = false
+  await reloadConfig()
 }
 
 onMounted(loadConfig)
@@ -413,18 +451,18 @@ onMounted(loadConfig)
         <h1 class="text-xl font-semibold">智能体配置</h1>
         <p class="text-sm text-muted-foreground mt-1">
           管理 LLM、嵌入、检索与 Agent 行为参数
-          <span v-if="diffCount > 0" class="ml-2 text-amber-500/80 text-xs">({{ diffCount }} 项已修改)</span>
+          <span v-if="diffCount > 0 || hasKeyEdit" class="ml-2 text-amber-500/80 text-xs">({{ diffCount > 0 ? diffCount : 0 }} 项已修改)</span>
         </p>
       </div>
       <div class="flex items-center gap-2">
-        <button @click="resetConfig" :disabled="resetting || diffCount === 0"
+        <button @click="resetConfig" :disabled="resetting || !canReset"
           class="rounded-lg px-3 py-2 text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40">
           <span v-if="resetting" class="inline-flex items-center gap-1.5">
             <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>重置中...
           </span>
           <span v-else>恢复默认</span>
         </button>
-        <button @click="saveConfig" :disabled="saving || diffCount === 0"
+        <button @click="saveConfig" :disabled="saving || (diffCount === 0 && !hasKeyEdit)"
           class="rounded-lg px-4 py-2 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
           <span v-if="saving" class="inline-flex items-center gap-1.5">
             <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>保存中...
@@ -450,7 +488,7 @@ onMounted(loadConfig)
               <h3 class="text-sm font-semibold">LLM 模型</h3>
               <p class="text-xs text-muted-foreground mt-0.5">大语言模型连接配置，用于对话生成和 Agent 推理</p>
             </div>
-            <div v-if="['llm_provider','llm_api_key','llm_api_base','llm_model','llm_temperature','llm_max_tokens'].some(k => isModified(k))"
+            <div v-if="['llm_provider','llm_api_key','llm_api_base','llm_model','llm_temperature','llm_max_tokens'].some(k => isModified(k)) || hasKeyEdit"
               class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
           </div>
         </div>

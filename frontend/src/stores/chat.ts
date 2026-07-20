@@ -1,7 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import type { Message, Conversation, SSEEvent, AgentStep } from '@/types'
-import { createChatStream, generateTitle, fetchConversations, fetchConversationMessages, deleteConversation as apiDeleteConv, saveConversationTitle, clearConversationMessages, deleteMessage as apiDeleteMsg, bulkDeleteMessages as apiBulkDeleteMsgs } from '@/api/chat'
+import { createChatStream, generateTitle, fetchConversations, fetchConversationMessages, deleteConversation as apiDeleteConv, saveConversationTitle, deleteMessage as apiDeleteMsg, bulkDeleteMessages as apiBulkDeleteMsgs, deleteMessagesFrom } from '@/api/chat'
 
 let msgCounter = 0
 function generateId(): string {
@@ -60,7 +60,9 @@ export const useChatStore = defineStore('chat', () => {
       // Merge server conversations without clearing local state
       _mergeServerConvs(convs)
       conversations.value.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.error('Failed to load conversations:', e)
+    }
     loadingLock = false
   }
 
@@ -71,12 +73,17 @@ export const useChatStore = defineStore('chat', () => {
 
   async function selectConversation(id: string) {
     const conv = conversations.value.find(c => c.id === id)
-    if (!conv || conv.messages.length > 0) { activeConversationId.value = id; return }
+    // If conversation not yet loaded OR already has messages, fetch anyway
+    if (conv && conv.messages.length > 0) {
+      // Already has messages, just activate
+      activeConversationId.value = id
+      return
+    }
     loadingHistory.value = true
     try {
       const msgs = await fetchConversationMessages(id)
       if (msgs.length > 0) {
-        conv.messages = msgs.map(m => {
+        const mapped = msgs.map(m => {
           const msg: Message = {
             id: generateId(), role: m.role as 'user' | 'assistant',
             content: m.content, timestamp: new Date(m.timestamp),
@@ -91,8 +98,19 @@ export const useChatStore = defineStore('chat', () => {
           }
           return msg
         })
+        if (conv) {
+          conv.messages = mapped
+        } else {
+          // Conversation didn't exist yet — use a minimal placeholder so activeConversation resolves
+          conversations.value.unshift({
+            id, title: '对话', messages: mapped,
+            createdAt: new Date(), updatedAt: new Date(),
+          })
+        }
       }
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.error('Failed to load conversation history:', e)
+    }
     activeConversationId.value = id
     loadingHistory.value = false
   }
@@ -159,10 +177,14 @@ export const useChatStore = defineStore('chat', () => {
     if (!conv) return
     const idx = conv.messages.findIndex(m => m.id === msgId)
     if (idx === -1) return
-    try { await clearConversationMessages(conv.id) } catch { /* ignore */ }
+    // Delete backend messages from this point onward to avoid duplicates
+    const msgToDelete = conv.messages[idx]
+    if (msgToDelete.backendId) {
+      try { await deleteMessagesFrom(conv.id, msgToDelete.backendId) } catch { /* ignore */ }
+    }
     conv.messages.splice(idx)
     conv.updatedAt = new Date()
-    sendMessage(newContent, true)  // skipTitle = true (conversation already exists)
+    sendMessage(newContent, true)
   }
 
   function sendMessage(content: string, skipTitle = false): Promise<void> {

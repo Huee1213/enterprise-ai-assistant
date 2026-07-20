@@ -590,6 +590,18 @@ const messageGroups = computed(() => {
   return entries
 })
 
+const summaryGroups = computed(() => {
+  const groups = groupBy(dmItems.value, 'conv_id')
+  const entries = Object.entries(groups).map(([convId, items]) => ({
+    convId, items: items.sort((a, b) => new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime()),
+    count: items.length, latest: new Date(Math.max(...items.map(m => new Date(m.created_at || 0).getTime()))),
+    title: items[0]?.title || '',
+    firstContent: items[0]?.summary || '',
+  }))
+  entries.sort((a, b) => b.latest.getTime() - a.latest.getTime())
+  return entries
+})
+
 function startEdit(item: any, field: string) { dmEditId.value = item.id; dmEditText.value = item[field] || item.summary || '' }
 function cancelEdit() { dmEditId.value = null }
 async function saveEditItem(item: any, field: string, endpoint: string) {
@@ -1125,7 +1137,7 @@ async function executeClearUserData() {
                     <div class="flex items-center gap-2 min-w-0">
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground shrink-0"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
                       <div class="min-w-0">
-                        <p class="text-xs font-medium truncate">{{ dmSummaries[g.id]?.summary || g.msgs[0]?.content?.slice(0, 60) || '(空对话)' }}{{ !dmSummaries[g.id] && (g.msgs[0]?.content?.length || 0) > 60 ? '...' : '' }}</p>
+                        <p class="text-xs font-medium truncate">{{ g.msgs[0]?.title || g.msgs[0]?.content?.slice(0, 60) || '(空对话)' }}{{ !g.msgs[0]?.title && (g.msgs[0]?.content?.length || 0) > 60 ? '...' : '' }}</p>
                         <p class="text-[10px] text-muted-foreground/60">{{ g.count }} 条消息 · {{ g.latest.toLocaleString() }}</p>
                       </div>
                     </div>
@@ -1193,26 +1205,37 @@ async function executeClearUserData() {
               <div v-if="dmItems.length === 0" class="text-center py-6 text-xs text-muted-foreground">暂无摘要</div>
               <div v-else>
                 <div class="flex items-center justify-between mb-2 px-0.5">
-                  <span class="text-[10px] text-muted-foreground/50">{{ dmItems.length }} 条摘要</span>
+                  <span class="text-[10px] text-muted-foreground/50">{{ dmConvId ? (summaryGroups.find(g => g.convId === dmConvId)?.count || 0) + ' 条摘要' : summaryGroups.length + ' 个对话' }}</span>
                 </div>
-                <div class="space-y-2">
-                <div v-for="sum in dmItems" :key="sum.id" class="rounded-lg border border-border p-3">
-                  <div class="flex items-center justify-between mb-1">
-                    <span class="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">#{{ sum.id }}</span>
-                    <div class="flex items-center gap-1">
-                      <button v-if="dmEditId !== sum.id" @click="startEdit(sum, 'summary')" class="text-[10px] text-muted-foreground hover:text-foreground px-1">编辑</button>
-                      <button @click="requestDeleteItem(`/auth/users/${dmUser!.id}/summaries/${sum.id}`, '摘要')" class="text-[10px] text-muted-foreground hover:text-destructive px-1">删除</button>
+                <div v-if="!dmConvId" class="space-y-1">
+                  <button v-for="g in summaryGroups" :key="g.convId" @click="dmConvId = g.convId" class="w-full text-left rounded-lg border border-border p-2.5 transition-colors hover:bg-muted/30 flex items-center gap-2">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground shrink-0"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+                    <div class="flex-1 min-w-0">
+                      <p class="text-xs font-medium truncate">{{ g.title || g.firstContent?.slice(0, 60) || '(空)' }}{{ !g.title && (g.firstContent?.length || 0) > 60 ? '...' : '' }}</p>
+                      <p class="text-[10px] text-muted-foreground/60">{{ g.count }} 条摘要 · {{ g.latest.toLocaleString() }}</p>
                     </div>
-                  </div>
-                  <textarea v-if="dmEditId === sum.id" v-model="dmEditText" class="w-full text-xs bg-background border border-input rounded px-2 py-1 resize-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" rows="2" />
-                  <p v-else class="text-xs leading-relaxed text-foreground/85">{{ (sum.summary || '').slice(0, 300) }}{{ (sum.summary || '').length > 300 ? '...' : '' }}</p>
-                  <div v-if="dmEditId === sum.id" class="flex gap-1 mt-1 justify-end">
-                    <button @click="cancelEdit()" class="text-[10px] text-muted-foreground hover:text-foreground px-1">取消</button>
-                    <button @click="saveEditItem(sum, 'summary', `/auth/users/${dmUser!.id}/summaries/${sum.id}`)" class="text-[10px] text-primary hover:text-primary/80 px-1">保存</button>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-muted-foreground/40 shrink-0"><polyline points="9 18 15 12 9 6"/></svg>
+                  </button>
+                </div>
+                <div v-else class="space-y-2">
+                  <button @click="dmConvId = null" class="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 mb-2"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"/></svg>返回对话列表</button>
+                  <div v-for="sum in (summaryGroups.find(g => g.convId === dmConvId)?.items || [])" :key="sum.id" class="rounded-lg border border-border p-3">
+                    <div class="flex items-center justify-between mb-1">
+                      <span class="text-[10px] font-mono bg-muted px-1.5 py-0.5 rounded text-muted-foreground">#{{ sum.id }}</span>
+                      <div class="flex items-center gap-1">
+                        <button v-if="dmEditId !== sum.id" @click="startEdit(sum, 'summary')" class="text-[10px] text-muted-foreground hover:text-foreground px-1">编辑</button>
+                        <button @click="requestDeleteItem(`/auth/users/${dmUser!.id}/summaries/${sum.id}`, '摘要')" class="text-[10px] text-muted-foreground hover:text-destructive px-1">删除</button>
+                      </div>
+                    </div>
+                    <textarea v-if="dmEditId === sum.id" v-model="dmEditText" class="w-full text-xs bg-background border border-input rounded px-2 py-1 resize-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" rows="2" />
+                    <p v-else class="text-xs leading-relaxed text-foreground/85 whitespace-pre-wrap">{{ (sum.summary || '').slice(0, 500) }}{{ (sum.summary || '').length > 500 ? '...' : '' }}</p>
+                    <div v-if="dmEditId === sum.id" class="flex gap-1 mt-1 justify-end">
+                      <button @click="cancelEdit()" class="text-[10px] text-muted-foreground hover:text-foreground px-1">取消</button>
+                      <button @click="saveEditItem(sum, 'summary', `/auth/users/${dmUser!.id}/summaries/${sum.id}`)" class="text-[10px] text-primary hover:text-primary/80 px-1">保存</button>
+                    </div>
                   </div>
                 </div>
               </div>
-            </div>
             </div>
 
             <!-- Stats tab -->
