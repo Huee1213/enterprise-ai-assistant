@@ -172,6 +172,17 @@ onUnmounted(() => health.stopAutoRefresh())
             <span v-show="!sidebarCollapsed">用户管理</span>
           </router-link>
         </div>
+
+        <div v-if="auth.hasPermission('agent.config')" class="animate-slide-in" style="animation-delay: 0.15s">
+          <p v-show="!sidebarCollapsed" class="text-[10px] font-medium text-muted-foreground/50 uppercase tracking-wider px-3 pt-3 pb-1">系统</p>
+          <router-link @click="mobileSidebarOpen = false" to="/admin/agent" class="flex items-center gap-2.5 rounded-md text-sm transition-colors hover:bg-sidebar-muted" :class="[
+            $route.path === '/admin/agent' ? 'bg-sidebar-muted font-medium text-sidebar-foreground' : 'text-sidebar-foreground/80',
+            sidebarCollapsed ? 'w-9 h-9 justify-center px-0' : 'px-3 py-2'
+          ]" :title="sidebarCollapsed ? '智能体配置' : ''">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+            <span v-show="!sidebarCollapsed">智能体配置</span>
+          </router-link>
+        </div>
       </nav>
 
       <!-- Footer: collapse toggle + per-service status dots -->
@@ -243,7 +254,7 @@ onUnmounted(() => health.stopAutoRefresh())
       </div>
     </aside>
 
-    <main class="flex-1 overflow-hidden">
+    <main class="flex-1 overflow-y-auto">
       <!-- Mobile hamburger button (visible on all admin pages) -->
       <div class="md:hidden fixed top-2 left-2 z-10">
         <button
@@ -264,9 +275,11 @@ onUnmounted(() => health.stopAutoRefresh())
         </div>
       </div>
       <router-view v-else v-slot="{ Component }">
-        <transition name="page">
-          <component :is="Component" />
-        </transition>
+        <div class="relative">
+          <transition name="page">
+            <component :is="Component" />
+          </transition>
+        </div>
       </router-view>
     </main>
   </div>

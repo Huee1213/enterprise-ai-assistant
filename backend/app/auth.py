@@ -31,12 +31,13 @@ PERM_DOC_DOWNLOAD = "documents.download"
 
 PERM_ADMIN_VIEW = "system.admins.view"
 PERM_ADMIN_MANAGE = "system.admins.manage"
+PERM_AGENT_CONFIG = "agent.config"
 
 ALL_PERMISSIONS = [
     PERM_DASHBOARD,
     PERM_DOC_VIEW, PERM_DOC_UPLOAD, PERM_DOC_DELETE, PERM_DOC_DOWNLOAD,
     PERM_USER_VIEW, PERM_USER_CREATE, PERM_USER_EDIT, PERM_USER_DELETE, PERM_USER_IMPORT, PERM_USER_VIEW_DATA,
-    PERM_ADMIN_VIEW, PERM_ADMIN_MANAGE,
+    PERM_ADMIN_VIEW, PERM_ADMIN_MANAGE, PERM_AGENT_CONFIG,
 ]
 
 # Parent → children mapping for legacy permissions
@@ -81,6 +82,13 @@ PERM_GROUPS = [
         "perms": [
             {"key": PERM_ADMIN_VIEW, "label": "查看管理员"},
             {"key": PERM_ADMIN_MANAGE, "label": "管理权限"},
+        ],
+    },
+    {
+        "group": "agent",
+        "label": "智能体配置",
+        "perms": [
+            {"key": PERM_AGENT_CONFIG, "label": "管理 Agent 配置"},
         ],
     },
 ]

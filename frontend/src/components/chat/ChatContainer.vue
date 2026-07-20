@@ -25,6 +25,7 @@ const currentMatchIdx = ref(-1)
 const activeDotIdx = ref(0)
 const showTimeline = ref(false)
 let timelineTimer: ReturnType<typeof setTimeout> | null = null
+let scrollLocked = false
 
 function onTimelineEnter() {
   if (timelineTimer) clearTimeout(timelineTimer)
@@ -59,9 +60,15 @@ const userMsgItems = computed(() =>
 )
 
 function scrollToMsg(msgId: string) {
+  const msgIdx = chat.messages.findIndex(m => m.id === msgId)
+  if (msgIdx !== -1) {
+    activeDotIdx.value = msgIdx
+    scrollLocked = true
+    setTimeout(() => { scrollLocked = false }, 400)
+  }
   const el = msgRefs.value.get(msgId)
   if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    el.scrollIntoView({ behavior: 'auto', block: 'center' })
   }
 }
 
@@ -70,17 +77,20 @@ function handleDotClick(msgId: string) {
 }
 
 function onScroll() {
+  if (scrollLocked) return
   const el = scrollContainerRef.value
   if (!el || chat.messages.length === 0) return
-  const { scrollTop, scrollHeight, clientHeight } = el
-  const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
 
-  // Determine which message is most visible
   const containerRect = el.getBoundingClientRect()
   const midY = containerRect.top + containerRect.height / 2
-  let bestIdx = 0
+  let bestIdx = activeDotIdx.value
   let bestDist = Infinity
+  let found = false
+
   for (const [id, msgEl] of msgRefs.value.entries()) {
+    const msg = chat.messages.find(m => m.id === id)
+    if (!msg || msg.role !== 'user') continue
+    found = true
     const rect = msgEl.getBoundingClientRect()
     const dist = Math.abs(rect.top + rect.height / 2 - midY)
     if (dist < bestDist) {
@@ -88,7 +98,7 @@ function onScroll() {
       bestIdx = chat.messages.findIndex(m => m.id === id)
     }
   }
-  activeDotIdx.value = bestIdx
+  if (found) activeDotIdx.value = bestIdx
 }
 
 function setMsgRef(id: string, el: HTMLElement | null) {
@@ -295,12 +305,12 @@ defineExpose({ toggleSearch })
         @mouseleave="onTimelineLeave"
       >
         <!-- Bars column -->
-        <div class="h-3/5 flex flex-col items-center justify-center gap-1.5 py-1 px-1 -mr-1">
+        <div class="h-3/5 flex flex-col items-end justify-center gap-1.5 py-1 -mr-1">
           <div
             v-for="(item, i) in userMsgItems.slice(0, 6)"
             :key="item.id"
-            class="w-3.5 h-1 rounded-sm transition-all duration-200"
-            :class="activeDotIdx === item.idx ? 'bg-primary/70' : 'bg-muted-foreground/35'"
+            class="h-1 rounded-sm transition-all duration-200 ease-out"
+            :class="activeDotIdx === item.idx ? 'w-5 bg-primary' : 'w-2 bg-muted-foreground/30'"
           />
         </div>
 

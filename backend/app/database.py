@@ -26,7 +26,15 @@ class UserModel(Base):
     last_login_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     preferences = Column(Text, default="{}")
-    permissions = Column(Text, default="")  # JSON array for admin role permissions; empty = all/super_admin
+    permissions = Column(Text, default="")
+
+
+class AgentConfig(Base):
+    __tablename__ = "agent_config"
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    config_json = Column(Text, nullable=False, default="{}")
+    updated_by = Column(String(36), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 async def get_db() -> AsyncSession:
@@ -51,6 +59,7 @@ async def init_db():
             "ALTER TABLE users ADD COLUMN IF NOT EXISTS permissions TEXT DEFAULT ''",
             "UPDATE users SET role = 'super_admin' WHERE username = 'admin'",
             "UPDATE users SET employee_id = CONCAT('EMP-', UPPER(SUBSTRING(MD5(id::text) FROM 1 FOR 6))) WHERE employee_id IS NULL OR employee_id = ''",
+            "CREATE TABLE IF NOT EXISTS agent_config (id SERIAL PRIMARY KEY, config_json TEXT NOT NULL DEFAULT '{}', updated_by VARCHAR(36), updated_at TIMESTAMPTZ DEFAULT NOW())",
         ]
         for sql in migrations:
             try:

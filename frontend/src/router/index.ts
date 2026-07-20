@@ -36,6 +36,11 @@ const router = createRouter({
           name: 'admin-users',
           component: () => import('@/views/AdminUsers.vue'),
         },
+        {
+          path: 'agent',
+          name: 'admin-agent',
+          component: () => import('@/views/AdminAgentConfig.vue'),
+        },
       ],
     },
   ],

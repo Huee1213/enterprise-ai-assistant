@@ -7,9 +7,10 @@
 ## 🎯 功能特性
 
 - **🔐 用户认证与角色权限** — JWT 双角色（管理员/员工），管理员管理知识库与用户，员工使用问答
-- **🔑 细粒度权限系统** — 12 项权限（文档/用户/系统分组），权限修改即时生效，无需重新登录
+- **🔑 细粒度权限系统** — 13 项权限（文档/用户/系统/Agent 分组），权限修改即时生效，无需重新登录
 - **🔐 Redis 令牌管理** — 多设备登录冲突检测，支持强制登录（409 弹窗 + 401 跨设备踢出）
-- **🔐 密码强度检测** — 5 项指标实时评估（小写/大写/数字/特殊字符/长度），一键生成安全密码
+- **🔧 智能体配置管理** — 可视化配置 LLM（供应商/模型/密钥/Temperature）、向量嵌入（支持本地 ONNX / 远程 / 与 LLM 一致）、检索参数、Agent 行为
+- **🔐 密钥安全存储** — API Key 全程掩码处理，保存后不可查看明文
 - **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV，单文件 500MB 上限，支持多文件批量上传
 - **🗑️ 文档多选删除** — 支持逐条删除和批量删除（`POST /api/documents/batch-delete`）
 - **🤖 LangGraph Agent 工作流** — 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
@@ -71,6 +72,7 @@ enterprise-ai-assistant/
 │   │       ├── auth.py          # 登录/注册/用户管理
 │   │       ├── chat.py          # 流式/简单聊天 + 对话历史
 │   │       ├── documents.py     # 文档上传/详情/预览（仅 admin）
+│   │       ├── agent_config.py  # 智能体配置 CRUD
 │   │       └── health.py        # 健康检查
 │   ├── Dockerfile
 │   └── requirements.txt
@@ -93,6 +95,7 @@ enterprise-ai-assistant/
 │   │       ├── LoginView.vue    # 登录
 │   │       ├── AdminLayout.vue  # 管理后台布局
 │   │       ├── AdminDashboard.vue # 系统总览
+│   │       ├── AdminAgentConfig.vue # 智能体配置管理
 │   │       ├── AdminUsers.vue   # 用户管理
 │   │       └── DocumentsView.vue # 文档管理（上传/详情/预览）
 │   ├── Dockerfile
@@ -224,6 +227,10 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `GET` | `/api/documents/{id}/file` | JWT | admin | 下载原文件 |
 | `DELETE` | `/api/documents/{id}` | JWT | admin | 删除单个文档 |
 | `POST` | `/api/documents/batch-delete` | JWT | admin | 批量删除文档 |
+| `GET` | `/api/agent/config` | JWT | `agent.config` | 读取智能体配置 |
+| `PUT` | `/api/agent/config` | JWT | `agent.config` | 保存配置覆盖项 |
+| `POST` | `/api/agent/config/reset` | JWT | `agent.config` | 恢复默认配置 |
+| `POST` | `/api/agent/config/fetch-models` | JWT | `agent.config` | 获取供应商模型列表 |
 | `GET` | `/health` | — | — | 健康检查 |
 
 ---
@@ -238,6 +245,8 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `LLM_TEMPERATURE` | `0.1` | LLM 温度参数 |
 | `LLM_MAX_TOKENS` | `4096` | 最大 Token 数 |
 | `EMBEDDING_MODEL` | `local/BAAI/bge-small-en-v1.5` | 向量化模型 |
+| `EMBEDDING_API_KEY` | — | 嵌入 API 密钥（远程模式） |
+| `LLM_PROVIDER` | `openai` | 默认 LLM 供应商 |
 | `JWT_SECRET_KEY` | *(内置默认值)* | JWT 签名密钥 |
 | `TZ` | `Asia/Shanghai` | 时区 |
 | `MILVUS_URI` | `http://milvus:19530` | Milvus 连接地址 |
@@ -258,7 +267,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 │  · 员工工作台 │     └──────────────┘     │  · JWT 认证              │
 │  · 管理后台   │                           │  · LangGraph Agent       │
 │  · 登录      │                           │  · 长短期记忆             │
-└──────────────┘                           │  · 文档管理               │
+└──────────────┘                           │  · 文档管理   │                           │  · 智能体配置管理          │
                                            └──────────┬──────────────┘
                                                       │
              ┌────────────────────────────────────────┼───────────────────────┐
@@ -293,6 +302,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 |------|------|--------|
 | `/` 聊天工作台 | ✅ | ✅ |
 | `/admin` 后台总览 | — | ✅ |
+| `/admin/agent` 智能体配置 | — | ✅ |
 | `/admin/documents` 文档管理 | — | ✅ |
 | `/admin/users` 用户管理 | — | ✅ |
 

@@ -13,6 +13,10 @@ const showStaleDialog = ref(false)
 const staleMessage = ref('')
 let unsubStale: (() => void) | null = null
 
+const routeTransitionMsg = ref('')
+let unsubBeforeEach: (() => void) | null = null
+let unsubAfterEach: (() => void) | null = null
+
 onStaleSession(() => {
   staleMessage.value = '该账户已在别处登录，请重新登录'
   showStaleDialog.value = true
@@ -27,10 +31,24 @@ function onStaleConfirm() {
 onMounted(async () => {
   theme.init()
   await auth.init()
+
+  unsubBeforeEach = router.beforeEach((to, from) => {
+    const fromAdmin = from.path.startsWith('/admin')
+    const toAdmin = to.path.startsWith('/admin')
+    if (fromAdmin && !toAdmin) routeTransitionMsg.value = '正在进入对话页面'
+    else if (!fromAdmin && toAdmin) routeTransitionMsg.value = '正在进入管理后台'
+    else routeTransitionMsg.value = ''
+  })
+
+  unsubAfterEach = router.afterEach(() => {
+    setTimeout(() => { routeTransitionMsg.value = '' }, 600)
+  })
 })
 
 onUnmounted(() => {
   if (unsubStale) unsubStale()
+  if (unsubBeforeEach) unsubBeforeEach()
+  if (unsubAfterEach) unsubAfterEach()
 })
 </script>
 
@@ -59,11 +77,21 @@ onUnmounted(() => {
     </div>
   </div>
 
+  <!-- Route transition overlay -->
+  <div v-if="routeTransitionMsg" class="fixed inset-0 z-[9998] flex items-center justify-center bg-background/80 backdrop-blur-sm animate-fade-in">
+    <div class="flex flex-col items-center gap-3">
+      <svg class="animate-spin-slow text-muted-foreground" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+      <p class="text-sm text-muted-foreground animate-fade-in-up">{{ routeTransitionMsg }}</p>
+    </div>
+  </div>
+
   <div class="min-h-screen bg-background text-foreground">
     <router-view v-slot="{ Component }">
-      <transition name="page">
-        <component :is="Component" />
-      </transition>
+      <div class="relative">
+        <transition name="page">
+          <component :is="Component" />
+        </transition>
+      </div>
     </router-view>
   </div>
 </template>
