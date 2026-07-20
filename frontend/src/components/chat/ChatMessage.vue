@@ -199,7 +199,7 @@ const agentStatusText = computed(() => {
 
     <div class="flex-1 max-w-[80%] flex flex-col gap-0.5" :class="isUser ? 'items-end' : 'items-start'">
       <div
-        class="rounded-2xl px-4 py-3 relative w-fit min-w-[60px]"
+        class="rounded-2xl px-4 py-3 relative w-fit"
         :class="isUser
           ? 'bg-primary/10 text-foreground rounded-tr-sm'
           : 'bg-card text-card-foreground border border-border rounded-tl-sm'"

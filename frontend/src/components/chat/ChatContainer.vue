@@ -23,6 +23,18 @@ const currentMatchIdx = ref(-1)
 
 // Scroll tracking for position indicator
 const activeDotIdx = ref(0)
+const showTimeline = ref(false)
+let timelineTimer: ReturnType<typeof setTimeout> | null = null
+
+function onTimelineEnter() {
+  if (timelineTimer) clearTimeout(timelineTimer)
+  showTimeline.value = true
+}
+
+function onTimelineLeave() {
+  if (timelineTimer) clearTimeout(timelineTimer)
+  timelineTimer = setTimeout(() => { showTimeline.value = false }, 300)
+}
 
 const filteredMatchIndices = computed(() => {
   if (!searchQuery.value.trim()) return []
@@ -275,27 +287,32 @@ defineExpose({ toggleSearch })
       </div>
     </div>
 
-    <!-- Right-side message navigation bar -->
-    <div v-if="userMsgItems.length >= 2" class="absolute right-0 inset-y-0 z-10 flex items-center pointer-events-none">
-      <div class="relative w-8 h-3/5 flex items-center justify-center pointer-events-auto group/timeline">
-        <!-- Vertical strip with up to 6 segments -->
-        <div class="relative w-1.5 h-full rounded-full overflow-hidden bg-muted-foreground/10">
+    <!-- Right-side message navigation: small horizontal bars -->
+    <div v-if="userMsgItems.length >= 2" class="absolute right-8 inset-y-0 z-10 flex items-center pointer-events-none">
+      <div
+        class="relative flex items-center pointer-events-auto"
+        @mouseenter="onTimelineEnter"
+        @mouseleave="onTimelineLeave"
+      >
+        <!-- Bars column -->
+        <div class="h-3/5 flex flex-col items-center justify-center gap-1.5 py-1 px-1 -mr-1">
           <div
             v-for="(item, i) in userMsgItems.slice(0, 6)"
             :key="item.id"
-            class="absolute left-0 w-full rounded-full transition-all duration-200"
-            :class="i < 5 ? 'bg-muted-foreground/20' : 'bg-muted-foreground/15'"
-            :style="{
-              top: `${(i / Math.min(userMsgItems.length, 6)) * 100}%`,
-              height: `${(1 / Math.min(userMsgItems.length, 6)) * 100}%`,
-            }"
+            class="w-3.5 h-1 rounded-sm transition-all duration-200"
+            :class="activeDotIdx === item.idx ? 'bg-primary/70' : 'bg-muted-foreground/35'"
           />
         </div>
 
         <!-- Hover popup: scrollable message list -->
-        <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 hidden group-hover/timeline:flex flex-col pointer-events-auto">
-          <div class="bg-popover text-popover-foreground rounded-lg shadow-xl border border-border py-1.5 min-w-[200px] max-h-[320px] overflow-y-auto">
-            <div class="px-3 py-1.5 text-[10px] font-medium text-muted-foreground/60 border-b border-border/50 flex items-center justify-between">
+        <div
+          v-show="showTimeline"
+          class="flex flex-col pointer-events-auto"
+          @mouseenter="onTimelineEnter"
+          @mouseleave="onTimelineLeave"
+        >
+          <div class="bg-popover text-popover-foreground rounded-lg shadow-xl border border-border py-1.5 min-w-[220px] max-w-[360px] max-h-[320px] overflow-y-auto">
+            <div class="px-3 py-1.5 text-[10px] font-medium text-muted-foreground/60 border-b border-border/50 flex items-center justify-between sticky top-0 bg-popover">
               <span>消息定位 ({{ userMsgItems.length }})</span>
               <span class="text-[9px]">点击跳转</span>
             </div>
@@ -311,7 +328,6 @@ defineExpose({ toggleSearch })
               <div v-if="activeDotIdx === item.idx" class="w-1.5 h-1.5 rounded-full bg-primary shrink-0 mt-1.5" />
             </div>
           </div>
-          <div class="w-0 h-0 absolute -right-[5px] top-1/2 -translate-y-1/2 border-l-[5px] border-l-popover border-y-[5px] border-y-transparent" />
         </div>
       </div>
     </div>
