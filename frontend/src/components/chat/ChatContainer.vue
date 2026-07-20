@@ -138,6 +138,8 @@ function handleSend(message: string) {
 function handleEdit(msgId: string, newContent: string) {
   chat.resendEdit(msgId, newContent)
 }
+
+defineExpose({ toggleSearch })
 </script>
 
 <template>
@@ -224,15 +226,20 @@ function handleEdit(msgId: string, newContent: string) {
       </div>
     </div>
 
-    <!-- Search button floating above input -->
-    <button
-      v-if="chat.messages.length > 0"
-      @click="toggleSearch"
-      class="absolute bottom-16 right-4 z-10 rounded-full w-9 h-9 bg-card border border-border shadow-md flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-all"
-      :title="showSearch ? '关闭搜索' : '搜索对话 (Ctrl+F)'"
-    >
-      <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-    </button>
+    <!-- Right-side match position indicator -->
+    <div v-if="showSearch && searchQuery.trim()" class="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center gap-0.5">
+      <div class="bg-card border border-border rounded-lg py-2 px-1 shadow-md flex flex-col items-center gap-1 max-h-[300px] overflow-y-auto scrollbar-none">
+        <div
+          v-for="(matchIdx, mi) in filteredMatchIndices"
+          :key="matchIdx"
+          @click="currentMatchIdx = mi; jumpToMatch('next')"
+          class="w-2 h-2 rounded-full cursor-pointer transition-all shrink-0"
+          :class="mi === currentMatchIdx ? 'bg-primary scale-125 shadow-sm shadow-primary/30' : 'bg-muted-foreground/30 hover:bg-muted-foreground/60'"
+          :title="`跳转到第 ${matchIdx + 1} 条消息`"
+        />
+      </div>
+      <span class="text-[10px] text-muted-foreground tabular-nums mt-1">{{ filteredMatchIndices.length }}</span>
+    </div>
 
     <ChatInput :disabled="chat.isStreaming" :isStreaming="chat.isStreaming" @send="handleSend" @stop="chat.stopStreaming" />
 

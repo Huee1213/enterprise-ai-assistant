@@ -13,6 +13,7 @@ const route = useRoute()
 const showDebug = ref(false)
 const mobileSidebarOpen = ref(false)
 const sidebarCollapsed = ref(false)
+const chatContainerRef = ref<InstanceType<typeof ChatContainer> | null>(null)
 
 const expandedSteps = ref<Set<string>>(new Set())
 
@@ -167,6 +168,14 @@ async function saveChatAvatarUrl() {
             <path d="M16 14H8a4 4 0 0 0-4 4v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1a4 4 0 0 0-4-4Z" />
           </svg>
           <span class="font-semibold text-sm truncate">{{ chat.activeConversation?.title || '企业 AI 知识助手' }}</span>
+          <button
+            v-if="chat.messages.length > 0"
+            @click="chatContainerRef?.toggleSearch()"
+            class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+            :title="'搜索对话内容 (Ctrl+F)'"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          </button>
         </div>
 
         <div class="flex items-center gap-0.5 md:gap-1">
@@ -200,7 +209,7 @@ async function saveChatAvatarUrl() {
         </div>
       </header>
 
-      <ChatContainer />
+      <ChatContainer ref="chatContainerRef" />
     </div>
 
     <!-- Agent debug panel -->
