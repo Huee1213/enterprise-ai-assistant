@@ -26,7 +26,6 @@
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
 - **🤖 LangChain 1.0 Agent** — 基于 `create_agent()` 构建，替代手工 StateGraph + ToolNode
-- **⚡ 非阻塞流式** — SSE 流式在独立线程池运行（`StreamingResponse` + sync wrapper），不占用事件循环，多请求不排队
 - **🔄 智能重生成** — 重生成仅覆盖对应消息（`deleteMessagesFrom`），不新增重复；仅最后一轮可重生成
 - **🧠 LLM 事实提取** — AI 根据对话内容生成结构化用户事实，替代关键词截取
 - **🗂️ 后端分包** — `agent/`、`documents/`、`vector/` 三级包结构
