@@ -90,9 +90,24 @@
 .docx-preview td, .docx-preview th { @apply border border-border px-2 py-1 text-xs; }
 .docx-preview img { @apply max-w-full rounded-lg my-2; }
 
-::-webkit-scrollbar { @apply w-2; }
-::-webkit-scrollbar-track { @apply bg-transparent; }
-::-webkit-scrollbar-thumb { @apply bg-muted-foreground/20 rounded-full hover:bg-muted-foreground/30; }
+/* Custom scrollbar */
+::-webkit-scrollbar { width: 8px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, currentColor 12%, transparent);
+  border-radius: 9999px;
+  min-height: 40px;
+}
+::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, currentColor 22%, transparent); }
+::-webkit-scrollbar-thumb:active { background: color-mix(in srgb, currentColor 32%, transparent); }
+
+/* Chonky scrollbar for chat input textarea */
+textarea::-webkit-scrollbar { width: 6px; }
+textarea::-webkit-scrollbar-thumb { background: color-mix(in srgb, currentColor 10%, transparent); border-radius: 9999px; }
+textarea::-webkit-scrollbar-thumb:hover { background: color-mix(in srgb, currentColor 20%, transparent); }
+
+/* Firefox */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, currentColor 12%, transparent) transparent; }
 
 /* TransitionGroup for conversation list */
 .conv-leave-active { @apply absolute inset-0 opacity-0 -translate-x-6 scale-95; transition: all 250ms ease-in-out; }

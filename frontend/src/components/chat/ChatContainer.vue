@@ -22,8 +22,7 @@ const searchQuery = ref('')
 const currentMatchIdx = ref(-1)
 
 // Scroll tracking for position indicator
-const scrollProgress = ref(0)
-const visibleMsgIndex = ref(0)
+const activeDotIdx = ref(0)
 
 const filteredMatchIndices = computed(() => {
   if (!searchQuery.value.trim()) return []
@@ -39,6 +38,26 @@ const dotMessages = computed(() =>
   chat.messages.filter(m => m.role === 'user')
 )
 
+const dotIndices = computed(() => {
+  const msgs = chat.messages
+  const dots = dotMessages.value
+  const total = msgs.length
+  if (total === 0) return []
+  return dots.map(m => ({
+    msg: m,
+    idx: msgs.indexOf(m),
+    label: m.content.slice(0, 40) + (m.content.length > 40 ? '...' : ''),
+    pct: total > 1 ? (msgs.indexOf(m) / (total - 1)) * 100 : 50,
+  }))
+})
+
+const activeDotPct = computed(() => {
+  const idx = activeDotIdx.value
+  const total = chat.messages.length
+  if (total <= 1) return 50
+  return (idx / (total - 1)) * 100
+})
+
 function scrollToMsg(msgId: string) {
   const el = msgRefs.value.get(msgId)
   if (el) {
@@ -46,11 +65,15 @@ function scrollToMsg(msgId: string) {
   }
 }
 
+function handleDotClick(msgId: string) {
+  scrollToMsg(msgId)
+}
+
 function onScroll() {
   const el = scrollContainerRef.value
   if (!el || chat.messages.length === 0) return
   const { scrollTop, scrollHeight, clientHeight } = el
-  scrollProgress.value = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
+  const progress = scrollHeight > clientHeight ? scrollTop / (scrollHeight - clientHeight) : 0
 
   // Determine which message is most visible
   const containerRect = el.getBoundingClientRect()
@@ -65,30 +88,12 @@ function onScroll() {
       bestIdx = chat.messages.findIndex(m => m.id === id)
     }
   }
-  visibleMsgIndex.value = bestIdx
+  activeDotIdx.value = bestIdx
 }
 
 function setMsgRef(id: string, el: HTMLElement | null) {
   if (el) msgRefs.value.set(id, el)
   else msgRefs.value.delete(id)
-}
-
-const dotIndices = computed(() => {
-  const msgs = chat.messages
-  const dots = dotMessages.value
-  const total = msgs.length
-  if (total === 0) return []
-  return dots.map(m => ({
-    msg: m,
-    idx: msgs.indexOf(m),
-    label: m.content.slice(0, 40) + (m.content.length > 40 ? '...' : ''),
-    pct: total > 1 ? (msgs.indexOf(m) / (total - 1)) * 100 : 50,
-  }))
-})
-
-function handleDotClick(msgId: string) {
-  const el = msgRefs.value.get(msgId)
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' })
 }
 
 function toggleSearch() {
@@ -282,25 +287,37 @@ defineExpose({ toggleSearch })
       </div>
     </div>
 
-    <!-- Right-side message navigation dots (DeepSeek-style) -->
-    <div v-if="dotIndices.length >= 2" class="absolute right-1.5 top-1/2 -translate-y-1/2 z-10 flex flex-col items-center">
-      <div class="relative flex flex-col items-center gap-0 py-1">
+    <!-- Right-side message navigation bar (DeepSeek-style) -->
+    <div v-if="dotIndices.length >= 2" class="absolute right-0 inset-y-0 z-10 flex items-center pointer-events-none">
+      <div class="relative h-3/5 w-8 flex flex-col items-center pointer-events-auto">
+        <!-- Vertical track -->
+        <div class="absolute inset-y-0 left-1/2 -translate-x-1/2 w-0.5 bg-muted-foreground/10 rounded-full" />
+        <!-- Active track fill -->
+        <div
+          class="absolute left-1/2 -translate-x-1/2 w-0.5 bg-primary/30 rounded-full transition-all duration-300"
+          :style="{ top: '0%', height: `${activeDotPct}%` }"
+        />
+        <!-- Dots -->
         <div
           v-for="(dot, di) in dotIndices"
           :key="dot.msg.id"
           @click="handleDotClick(dot.msg.id)"
-          class="group relative flex items-center justify-center cursor-pointer py-0.5"
-          :title="dot.label"
+          class="absolute left-1/2 -translate-x-1/2 -translate-y-1/2 group cursor-pointer z-10"
+          :style="{ top: `${dot.pct}%` }"
         >
-          <div
-            class="rounded-full transition-all duration-200"
-            :class="visibleMsgIndex >= dot.idx && (di === dotIndices.length - 1 || visibleMsgIndex < (dotIndices[di + 1]?.idx ?? Infinity))
-              ? 'w-2 h-2 bg-primary shadow-sm shadow-primary/30'
-              : 'w-1.5 h-1.5 bg-muted-foreground/25 hover:bg-muted-foreground/50'"
-          />
+          <!-- Click target (bigger than visible dot) -->
+          <div class="w-5 h-5 flex items-center justify-center">
+            <div
+              class="rounded-full transition-all duration-200"
+              :class="activeDotIdx === dot.idx
+                ? 'w-2.5 h-2.5 bg-primary shadow-sm shadow-primary/30'
+                : 'w-1.5 h-1.5 bg-muted-foreground/30 group-hover:bg-muted-foreground/50 group-hover:scale-125'"
+            />
+          </div>
           <!-- Tooltip -->
-          <div class="absolute right-full mr-2 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center pointer-events-none">
+          <div class="absolute right-full mr-3 top-1/2 -translate-y-1/2 hidden group-hover:flex items-center pointer-events-none">
             <div class="bg-popover text-popover-foreground text-[11px] rounded-md px-2.5 py-1.5 shadow-lg border border-border whitespace-nowrap max-w-[220px] truncate leading-relaxed">
+              <span class="text-[10px] text-muted-foreground/60 mr-1">#{{ dot.idx + 1 }}</span>
               {{ dot.label }}
             </div>
             <div class="w-0 h-0 border-l-4 border-l-popover border-y-4 border-y-transparent" />
