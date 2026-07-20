@@ -75,6 +75,27 @@ async def add_user_fact(db: AsyncSession, user_id: str, fact: str) -> None:
     await db.commit()
 
 
+async def generate_fact_from_message(llm, user_message: str, assistant_reply: str) -> str | None:
+    """Use LLM to extract a factual statement about the user from a conversation turn."""
+    try:
+        from langchain_core.messages import SystemMessage, HumanMessage
+        prompt = (
+            "从下面的对话中提取关于用户的事实信息。如果对话中包含用户个人信息（如姓名、喜好、职业等），"
+            "请用一句话概括这个事实。如果不包含任何可提取的信息，请只输出'无'。\n\n"
+            f"用户: {user_message}\n助手: {assistant_reply}"
+        )
+        resp = await llm.ainvoke([
+            SystemMessage(content="你是一个信息提取助手。"),
+            HumanMessage(content=prompt),
+        ])
+        fact = resp.content.strip().strip('"').strip("'")
+        if fact == "无" or len(fact) < 3:
+            return None
+        return fact[:200]
+    except Exception:
+        return None
+
+
 async def get_user_facts(db: AsyncSession, user_id: str, limit: int = 50) -> List[str]:
     result = await db.execute(
         select(MemoryFact).where(MemoryFact.user_id == user_id).order_by(desc(MemoryFact.id)).limit(limit)

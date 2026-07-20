@@ -286,6 +286,7 @@ defineExpose({ toggleSearch })
               :msgIndex="idx"
               :isAdmin="auth.isAdmin"
               :isStreaming="chat.isStreaming && msg === chat.messages[chat.messages.length - 1] && msg.role === 'assistant'"
+              :isLastMsg="idx === chat.messages.length - 1"
               :searchQuery="searchQuery"
               @edit="handleEdit"
               @retry="requestRetry"

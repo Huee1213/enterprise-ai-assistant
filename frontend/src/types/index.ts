@@ -66,6 +66,6 @@ export interface HealthStatus {
 }
 
 export type SSEEvent = {
-  event: 'token' | 'sources' | 'steps' | 'step' | 'reasoning' | 'done' | 'error'
+  event: 'token' | 'sources' | 'steps' | 'step' | 'reasoning' | 'done' | 'error' | 'saved_msg_ids'
   data: any
 }

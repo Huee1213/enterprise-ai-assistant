@@ -14,6 +14,7 @@ const props = defineProps<{
   selectMode?: boolean
   selected?: boolean
   searchQuery?: string
+  isLastMsg?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -348,7 +349,7 @@ const agentStatusText = computed(() => {
 
         <!-- Action buttons (below time) -->
       <div v-if="!isStreaming && message.content && !selectMode" class="flex items-center gap-1 px-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        <button v-if="!isUser" @click="handleRetry" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" title="重新生成">
+        <button v-if="!isUser && isLastMsg" @click="handleRetry" class="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors" title="重新生成">
           <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
           重新生成
         </button>

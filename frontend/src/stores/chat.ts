@@ -199,6 +199,8 @@ export const useChatStore = defineStore('chat', () => {
 
       let accumulatedContent = ''
       let titled = false
+      let lastUserMsgId: number | null = null
+      let lastAssistantMsgId: number | null = null
       const doTitle = (full: string) => {
         if (titled) return; titled = true
         generateTitle(full).then(t => {
@@ -222,9 +224,28 @@ export const useChatStore = defineStore('chat', () => {
             const list = Array.isArray(ev.data) ? ev.data : [ev.data]
             const existing = conv.messages[conv.messages.length - 1]?.steps || []
             updateLastAssistantMessage({ steps: [...existing, ...list].map(s => ({ ...s, duration_ms: s.duration_ms || 0 })) })
+          } else if (ev.event === 'saved_msg_ids') {
+            lastUserMsgId = ev.data.user_msg_id
+            lastAssistantMsgId = ev.data.assistant_msg_id
           } else if (ev.event === 'done') {
             isStreaming.value = false
             currentAbortController.value = null
+            if (lastUserMsgId) {
+              for (let i = conv.messages.length - 1; i >= 0; i--) {
+                if (conv.messages[i].role === 'user' && !conv.messages[i].backendId) {
+                  conv.messages = [...conv.messages]
+                  conv.messages[i] = { ...conv.messages[i], backendId: lastUserMsgId }
+                  break
+                }
+              }
+            }
+            if (lastAssistantMsgId) {
+              const last = conv.messages[conv.messages.length - 1]
+              if (last && last.role === 'assistant') {
+                conv.messages = [...conv.messages]
+                conv.messages[conv.messages.length - 1] = { ...last, backendId: lastAssistantMsgId }
+              }
+            }
             if (isFirst) doTitle(`用户说: ${content}\nAI回复: ${accumulatedContent}`)
             resolve()
           }

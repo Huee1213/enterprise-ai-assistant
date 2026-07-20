@@ -75,8 +75,8 @@ async def chat_stream(
         summary_note = f"\n\n对话摘要: {conv_summary}"
         memory_ctx = memory_ctx + summary_note if memory_ctx else summary_note
 
-    # Save user message (use the dependency session, then release it)
-    await save_message(db, user_id, conv_id, "user", request.message)
+    # Save user message and capture its DB ID for retry support
+    user_msg_id = await save_message(db, user_id, conv_id, "user", request.message)
 
     if request.use_agent:
         from app.agent.graph import stream_agent
@@ -85,12 +85,46 @@ async def chat_stream(
         from app.agent.graph import stream_rag
         generator = stream_rag(request.message, memory_ctx, history_ctx=history_ctx, db=db, user_id=user_id, conv_id=conv_id)
 
+    async def _post_stream_tasks(conv_id: str, user_msg: str, reply: str):
+        """Background: fact extraction + summary (runs after SSE stream ends)."""
+        try:
+            from langchain_openai import ChatOpenAI
+            from app.memory import generate_fact_from_message
+            fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+            fact = await generate_fact_from_message(fact_llm, user_msg, reply)
+            if fact:
+                await add_user_fact(db, user_id, fact)
+        except Exception:
+            pass
+        try:
+            from langchain_core.messages import SystemMessage, HumanMessage
+            from langchain_openai import ChatOpenAI
+            shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=250, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+            hist = await get_conversation_history(db, user_id, conv_id)
+            existing = await get_conversation_summary(db, user_id, conv_id)
+            msg_count = len(hist)
+            if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
+                context_parts = []
+                if existing:
+                    context_parts.append(f"旧摘要: {existing}")
+                context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:300]}" for h in hist[-10:]))
+                resp = await shared_llm.ainvoke([SystemMessage(content="用50字以内概括这段对话，包含关键信息。"), HumanMessage(content="\n\n".join(context_parts))])
+                summary = resp.content.strip()[:150]
+                if summary:
+                    await add_conversation_summary(db, user_id, conv_id, summary)
+        except Exception:
+            pass
+
     async def _stream_and_save():
         full_content = ""
         steps_data = []
+        import asyncio as _asyncio
         try:
             async for event in generator:
-                yield event
+                # Intercept done event — don't forward immediately
+                is_done = event.startswith("data: ") and '"done"' in event
+                if not is_done:
+                    yield event
                 try:
                     prefix = "data: "
                     if event.startswith(prefix):
@@ -108,37 +142,13 @@ async def chat_stream(
                         elif ev_type == "done":
                             if full_content:
                                 meta = json.dumps({"steps": steps_data}, ensure_ascii=False) if steps_data else "{}"
-                                await save_message(db, user_id, conv_id, "assistant", full_content, metadata_str=meta)
-                                try:
-                                    q = request.message.lower()
-                                    fact_kw = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
-                                    for kw in fact_kw:
-                                        if kw in q:
-                                            idx = q.index(kw)
-                                            fact = request.message[idx:idx+100].split("\n")[0][:80]
-                                            if fact:
-                                                await add_user_fact(db, user_id, f"用户说: {fact}")
-                                            break
-                                except Exception:
-                                    pass
-                                try:
-                                    hist = await get_conversation_history(db, user_id, conv_id)
-                                    existing = await get_conversation_summary(db, user_id, conv_id)
-                                    msg_count = len(hist)
-                                    if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
-                                        from langchain_openai import ChatOpenAI
-                                        from langchain_core.messages import SystemMessage, HumanMessage
-                                        llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=250, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-                                        context_parts = []
-                                        if existing:
-                                            context_parts.append(f"旧摘要: {existing}")
-                                        context_parts.append("最近对话:\n" + "\n".join(f"{'用户' if h['role']=='user' else 'AI'}: {h['content'][:300]}" for h in hist[-10:]))
-                                        resp = await llm.ainvoke([SystemMessage(content="用50字以内概括这段对话，包含关键信息。"), HumanMessage(content="\n\n".join(context_parts))])
-                                        summary = resp.content.strip()[:150]
-                                        if summary:
-                                            await add_conversation_summary(db, user_id, conv_id, summary)
-                                except Exception:
-                                    pass
+                                assistant_id = await save_message(db, user_id, conv_id, "assistant", full_content, metadata_str=meta)
+                                # Emit saved_msg_ids BEFORE done so frontend captures them
+                                yield f"data: {json.dumps({'event': 'saved_msg_ids', 'data': {'user_msg_id': user_msg_id, 'assistant_msg_id': assistant_id}})}\n\n"
+                                # Now forward the original done event
+                                yield event
+                                # Fire-and-forget fact extraction + summary generation
+                                _asyncio.create_task(_post_stream_tasks(conv_id, request.message, full_content))
                 except GeneratorExit:
                     raise
                 except Exception:

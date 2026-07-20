@@ -136,17 +136,13 @@ async def stream_rag(query: str, memory_context: str = "",
 
         if db and user_id:
             try:
-                from app.memory import add_user_fact
-                fact_keywords = ["记住", "我叫", "我是", "我的名字", "我喜欢", "remember", "my name", "i am", "i like"]
-                q_lower = query.lower()
-                for kw in fact_keywords:
-                    if kw in q_lower:
-                        idx = q_lower.index(kw)
-                        fact = query[idx:idx + 100].split("\n")[0][:80]
-                        if fact:
-                            await add_user_fact(db, user_id, f"用户说: {fact}")
-                            yield f"data: {json.dumps({'event': 'step', 'data': {'step': 0, 'action': 'memory', 'input': '', 'output': '已保存记忆: ' + fact, 'duration_ms': 0}})}\n\n"
-                        break
+                from app.memory import add_user_fact, generate_fact_from_message
+                from langchain_openai import ChatOpenAI
+                fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.1, max_tokens=100, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                fact = await generate_fact_from_message(fact_llm, query, full_answer)
+                if fact:
+                    await add_user_fact(db, user_id, fact)
+                    yield f"data: {json.dumps({'event': 'step', 'data': {'step': 0, 'action': 'memory', 'input': '', 'output': '已保存记忆: ' + fact, 'duration_ms': 0}})}\n\n"
             except Exception:
                 pass
 

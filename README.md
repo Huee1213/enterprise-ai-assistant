@@ -25,6 +25,11 @@
 - **📱 响应式布局** — 桌面端侧栏可缩边（仅图标），移动端滑出式侧栏 + Agent 面板
 - **🌙 深色模式** — 持久主题切换，支持系统偏好检测
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
+- **🤖 LangChain 1.0 Agent** — 基于 `create_agent()` 构建，替代手工 StateGraph + ToolNode
+- **⚡ 非阻塞流式** — `asyncio.create_task` 后台处理事实提取与摘要，不阻塞 SSE 响应
+- **🔄 智能重生成** — 重生成仅覆盖对应消息（`deleteMessagesFrom`），不新增重复；仅最后一轮可重生成
+- **🧠 LLM 事实提取** — AI 根据对话内容生成结构化用户事实，替代关键词截取
+- **🗂️ 后端分包** — `agent/`、`documents/`、`vector/` 三级包结构
 - **🔒 安全加固** — JWT 密钥必需环境变量；密码哈希与 JWT 密钥解耦；路径遍历防护；文件上传大小限制（文档 100MB / 头像 5MB）；异常信息防泄漏；异步线程池卸载阻塞操作
 
 ---
@@ -224,6 +229,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `GET` | `/api/chat/conversations` | JWT | — | 对话列表 |
 | `GET` | `/api/chat/conversations/{id}` | JWT | — | 对话消息历史 |
 | `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
+| `DELETE` | `/api/chat/conversations/{id}/messages/from/{mid}` | JWT | — | 删除该消息及之后所有消息 |
 | `GET` | `/api/chat/conversations/{id}/search?q=` | JWT | — | 搜索对话内消息 |
 | `DELETE` | `/api/chat/conversations/{id}/messages/from/{mid}` | JWT | — | 删除该消息及之后所有消息 |
 | `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |

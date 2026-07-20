@@ -577,7 +577,10 @@ async def bulk_delete_facts_route(
 ):
     from sqlalchemy import delete as _d
     from app.memory import MemoryFact
-    r = await db.execute(_d(MemoryFact).where(MemoryFact.id.in_(req.ids), MemoryFact.user_id == user_id))
+    cond = [MemoryFact.user_id == user_id]
+    if req.ids:
+        cond.append(MemoryFact.id.in_(req.ids))
+    r = await db.execute(_d(MemoryFact).where(*cond))
     await db.commit()
     return {"status": "deleted", "count": r.rowcount}
 
@@ -589,7 +592,10 @@ async def bulk_delete_summaries_route(
 ):
     from sqlalchemy import delete as _d
     from app.memory import ConversationSummary
-    r = await db.execute(_d(ConversationSummary).where(ConversationSummary.id.in_(req.ids), ConversationSummary.user_id == user_id))
+    cond = [ConversationSummary.user_id == user_id]
+    if req.ids:
+        cond.append(ConversationSummary.id.in_(req.ids))
+    r = await db.execute(_d(ConversationSummary).where(*cond))
     await db.commit()
     return {"status": "deleted", "count": r.rowcount}
 
