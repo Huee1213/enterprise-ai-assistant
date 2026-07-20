@@ -86,29 +86,42 @@ async def chat_stream(
         generator = stream_rag(request.message, memory_ctx, history_ctx=history_ctx, db=db, user_id=user_id, conv_id=conv_id)
 
     async def _post_stream_tasks(conv_id: str, user_msg: str, reply: str):
-        """Background: fact extraction + summary (runs after SSE stream ends).
-        Uses its own DB session to avoid conflicts with the request-scoped session.
+        """Background: summary generation only (runs after SSE stream ends).
+        Fact extraction is lightweight keyword-based inline to avoid LLM overhead.
+        Uses its own DB session.
         """
         from app.database import AsyncSessionLocal
-        try:
-            async with AsyncSessionLocal() as bg_db:
-                from langchain_openai import ChatOpenAI
-                from app.memory import generate_fact_from_message
-                fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-                fact = await generate_fact_from_message(fact_llm, user_msg, reply)
-                if fact:
-                    await add_user_fact(bg_db, user_id, fact)
-        except Exception:
-            pass
+        # Lightweight keyword-based fact extraction (no LLM call)
+        if user_msg:
+            q = user_msg.lower()
+            fact_kw = {"我叫": "姓名", "我是": "身份", "我喜欢": "喜好", "我的名字": "姓名",
+                       "我今年": "年龄", "我住在": "住址", "我的职业": "职业",
+                       "我工作": "工作", "我学": "学习", "我出生": "出生", "我来自": "来自",
+                       "remember": "remember", "my name": "name", "i am": "identity",
+                       "i like": "preference", "i work": "work", "i study": "study",
+                       "i live": "live"}
+            found = []
+            for kw, cat in fact_kw.items():
+                if kw in q:
+                    idx = q.index(kw)
+                    found.append(q[idx:idx+80].split("\n")[0][:60])
+            if found:
+                try:
+                    async with AsyncSessionLocal() as bg_db:
+                        for f in found:
+                            await add_user_fact(bg_db, user_id, f)
+                except Exception:
+                    pass
+        # Summary generation (LLM, limited to every 10 messages)
         try:
             async with AsyncSessionLocal() as bg_db:
                 from langchain_core.messages import SystemMessage, HumanMessage
                 from langchain_openai import ChatOpenAI
-                shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=500, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
                 hist = await get_conversation_history(bg_db, user_id, conv_id)
                 existing = await get_conversation_summary(bg_db, user_id, conv_id)
                 msg_count = len(hist)
                 if msg_count >= 10 and (msg_count % 10 == 0 or not existing):
+                    shared_llm = ChatOpenAI(model=settings.llm_model, temperature=0.3, max_tokens=500, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
                     context_parts = []
                     if existing:
                         context_parts.append(f"旧摘要: {existing}")

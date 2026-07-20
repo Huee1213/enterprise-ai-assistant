@@ -148,19 +148,18 @@ async def get_recent_summaries(db: AsyncSession, user_id: str, limit: int = 5) -
 
 # ── Conversation History (Short-term/Medium-term memory) ───────────────
 
-async def save_message(db: AsyncSession, user_id: str, conversation_id: str, role: str, content: str, metadata_str: str = "{}") -> None:
+async def save_message(db: AsyncSession, user_id: str, conversation_id: str, role: str, content: str, metadata_str: str = "{}") -> int:
     from sqlalchemy import text as _sql_text
-    # Auto-create conversation record if not exists
     result = await db.execute(select(Conversation).where(Conversation.id == conversation_id))
     if not result.scalar_one_or_none():
         db.add(Conversation(id=conversation_id, user_id=user_id, title="新对话", created_at=datetime.now(timezone.utc), updated_at=datetime.now(timezone.utc)))
         await db.flush()
-    # Save the actual message with metadata using raw SQL to ensure msg_meta is set
-    await db.execute(
-        _sql_text("INSERT INTO conversation_history (user_id, conversation_id, role, content, msg_meta, timestamp) VALUES (:uid, :cid, :role, :content, :meta, :ts)"),
+    row = await db.execute(
+        _sql_text("INSERT INTO conversation_history (user_id, conversation_id, role, content, msg_meta, timestamp) VALUES (:uid, :cid, :role, :content, :meta, :ts) RETURNING id"),
         {"uid": user_id, "cid": conversation_id, "role": role, "content": content, "meta": metadata_str, "ts": datetime.now(timezone.utc)},
     )
     await db.commit()
+    return row.scalar_one()
 
 
 async def update_conversation_title(db: AsyncSession, user_id: str, conversation_id: str, title: str) -> None:
