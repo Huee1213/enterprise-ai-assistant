@@ -129,7 +129,7 @@ enterprise-ai-assistant/
 - Docker & Docker Compose v2
 - **OpenAI 兼容 API Key**（OpenAI / DeepSeek / OpenRouter 等）
 
-> **国内用户加速**：Dockerfile 已配置清华 PyPI 镜像 (`pypi.tuna.tsinghua.edu.cn`) 和 npmmirror 镜像 (`registry.npmmirror.com`)，构建时自动加速依赖下载，无需手动配置。
+> **国内用户加速**：Dockerfile 已配置清华 PyPI 镜像 (`pypi.tuna.tsinghua.edu.cn`) 和 npmmirror 镜像 (`registry.npmmirror.com`)，构建时自动加速依赖下载，无需手动配置。另外 `.env` 中已预设 `HF_ENDPOINT=https://hf-mirror.com`，用于加速 Hugging Face 嵌入模型下载。
 
 ### 第一步：克隆与配置
 

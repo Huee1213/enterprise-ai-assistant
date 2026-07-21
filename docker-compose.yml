@@ -99,6 +99,7 @@ services:
       - SEARXNG_URL=http://searxng:8080
       - DB_URL=postgresql+asyncpg://app:app123@postgres:5432/enterprise_ai
       - REDIS_URL=redis://redis:6379/0
+      - HF_ENDPOINT=${HF_ENDPOINT:-https://hf-mirror.com}
     volumes:
       - app_data:/app/data
     depends_on:
