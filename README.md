@@ -112,9 +112,9 @@ enterprise-ai-assistant/
 │   │       └── DocumentsView.vue # 文档管理（上传/详情/预览）
 │   ├── Dockerfile
 │   └── package.json
-├── searxng/                      # SearXNG 配置
-│   ├── settings.yml              # （已 gitignore，需从 .example 复制）
-│   └── settings.yml.example      # 示例配置
+├── searxng/                      # SearXNG 配置（必须从 .example 复制）
+│   ├── settings.yml              # （已 gitignore，需从 .example 复制并填写 secret_key）
+│   └── settings.yml.example      # 示例配置（secret_key 须替换）
 ├── docker-compose.yml            # 8 服务编排
 ├── .env.example
 └── README.md
@@ -139,8 +139,16 @@ cd enterprise-ai-assistant
 
 cp .env.example .env
 
-# SearXNG 配置文件（非必需，容器首次启动会自动生成默认配置）
+# ⚠️ SearXNG 必需：先复制配置（否则 SearXNG 容器启动失败）
 cp searxng/settings.yml.example searxng/settings.yml
+```
+
+编辑 `searxng/settings.yml`，将 `secret_key` 替换为随机字符串：
+```bash
+# Linux/Mac:
+sed -i "s/change-this-to-a-random-secret-key/$(openssl rand -hex 32)/" searxng/settings.yml
+
+# Windows: 手动编辑 searxng/settings.yml，将 secret_key 替换为随机字符串
 ```
 
 编辑 `.env` 文件：
