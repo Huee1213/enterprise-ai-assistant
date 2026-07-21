@@ -384,7 +384,7 @@ async def delete_summary(db: AsyncSession, summary_id: int, user_id: str) -> boo
     return True
 
 
-async def build_memory_context(db: AsyncSession, user_id: str) -> str:
+async def build_memory_context(db: AsyncSession, user_id: str, conv_id: str = "") -> str:
     parts = []
     prefs = await get_user_preferences(db, user_id)
     if prefs:
@@ -392,7 +392,13 @@ async def build_memory_context(db: AsyncSession, user_id: str) -> str:
     facts = await get_user_facts(db, user_id, 10)
     if facts:
         parts.append(f"长期记忆: {'; '.join(facts)}")
-    summaries = await get_recent_summaries(db, user_id, 3)
-    if summaries:
-        parts.append(f"历史对话摘要: {'; '.join(summaries)}")
+    # Only include summaries from the current conversation, not cross-conversation
+    if conv_id:
+        curr = await get_conversation_summary(db, user_id, conv_id)
+        if curr:
+            parts.append(f"当前对话摘要: {curr}")
+    else:
+        summaries = await get_recent_summaries(db, user_id, 3)
+        if summaries:
+            parts.append(f"历史对话摘要: {'; '.join(summaries)}")
     return "\n".join(parts)

@@ -60,7 +60,7 @@ async def chat_stream(
 
     conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
     user_id = current_user["user_id"]
-    memory_ctx = await build_memory_context(db, user_id)
+    memory_ctx = await build_memory_context(db, user_id, conv_id)
 
     history = await get_conversation_history(db, user_id, conv_id, limit=10)
     history_ctx = ""
@@ -204,7 +204,8 @@ async def chat_simple(
         raise HTTPException(status_code=500, detail="LLM API key not configured.")
 
     user_id = current_user["user_id"]
-    memory_ctx = await build_memory_context(db, user_id)
+    conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
+    memory_ctx = await build_memory_context(db, user_id, conv_id)
     conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
 
     await save_message(db, user_id, conv_id, "user", request.message)
