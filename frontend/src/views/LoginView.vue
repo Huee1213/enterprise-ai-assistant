@@ -124,9 +124,8 @@ function cancelReLogin() {
         </button>
       </form>
 
-      <div class="text-center space-y-1">
-        <p class="text-xs text-muted-foreground">员工用工号登录 · 管理员用 admin 登录</p>
-        <p class="text-[10px] text-muted-foreground/50">默认管理员: admin / admin123</p>
+      <div class="text-center">
+        <p class="text-xs text-muted-foreground">请输入用户名或工号登录</p>
       </div>
     </div>
   </div>
