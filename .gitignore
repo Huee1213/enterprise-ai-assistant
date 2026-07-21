@@ -36,3 +36,6 @@ searxng/settings.yml
 # Test / debug scripts
 backend/check_*.py
 backend/test_*.py
+
+# Test files
+backend/verify_*.py
