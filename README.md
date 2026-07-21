@@ -129,6 +129,8 @@ enterprise-ai-assistant/
 - Docker & Docker Compose v2
 - **OpenAI 兼容 API Key**（OpenAI / DeepSeek / OpenRouter 等）
 
+> **国内用户加速**：Dockerfile 已配置清华 PyPI 镜像 (`pypi.tuna.tsinghua.edu.cn`) 和 npmmirror 镜像 (`registry.npmmirror.com`)，构建时自动加速依赖下载，无需手动配置。
+
 ### 第一步：克隆与配置
 
 ```bash
@@ -149,7 +151,9 @@ LLM_API_BASE=https://api.openai.com/v1
 LLM_MODEL=gpt-4o-mini
 EMBEDDING_MODEL=local/BAAI/bge-small-en-v1.5
 # ⚠️ 必需：生成 JWT 签名密钥（否则后端容器启动失败）
-JWT_SECRET_KEY=$(openssl rand -hex 32)
+# Linux/Mac: JWT_SECRET_KEY=$(openssl rand -hex 32)
+# Windows: 使用 openssl rand -hex 32 或在线生成
+JWT_SECRET_KEY=your-32-byte-hex-secret-here
 ```
 
 ### 第二步：启动所有服务
@@ -176,7 +180,7 @@ docker-compose ps
 # 后端健康检查
 curl http://localhost:8000/health
 
-# 默认管理员账号: admin / admin123
+# 管理员账号由 init_db 自动创建（可在 .env 中配置管理员密码）
 ```
 
 #### 预期响应：

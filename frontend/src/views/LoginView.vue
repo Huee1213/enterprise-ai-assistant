@@ -125,7 +125,7 @@ function cancelReLogin() {
       </form>
 
       <div class="text-center">
-        <p class="text-xs text-muted-foreground">请输入用户名或工号登录</p>
+        <p class="text-xs text-muted-foreground">员工使用员工账号登录 · 管理员使用管理员账号登录</p>
       </div>
     </div>
   </div>
