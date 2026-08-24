@@ -69,37 +69,107 @@ async def update_user_preferences(db: AsyncSession, user_id: str, preferences: d
 
 # ── Facts (Long-term memory) ─────────────────────────────────────────────
 
+# Hard cap on stored facts per user; oldest are pruned beyond this.
+FACT_MAX_PER_USER = 200
+FACT_MAX_LENGTH = 200
+
+
+def _normalize_fact(content: str) -> str:
+    """Normalize a fact for deduplication (whitespace + trailing punctuation)."""
+    s = " ".join((content or "").split())
+    s = s.strip().strip("。.!！？?")
+    return s.lower()
+
+
 async def add_user_fact(db: AsyncSession, user_id: str, fact: str) -> None:
-    entry = MemoryFact(user_id=user_id, content=fact, timestamp=datetime.now(timezone.utc))
-    db.add(entry)
+    """Store a fact, deduplicated against existing facts.
+
+    Re-extracting the same fact (e.g. the user repeats a preference across
+    turns, or both the RAG and post-stream paths fire) updates the existing
+    row's timestamp instead of inserting a duplicate.
+    """
+    fact = (fact or "").strip()[:FACT_MAX_LENGTH]
+    if not fact:
+        return
+    key = _normalize_fact(fact)
+    existing = (await db.execute(
+        select(MemoryFact).where(MemoryFact.user_id == user_id)
+    )).scalars().all()
+    for row in existing:
+        if _normalize_fact(row.content) == key:
+            row.content = fact
+            row.timestamp = datetime.now(timezone.utc)
+            await db.commit()
+            return
+    db.add(MemoryFact(user_id=user_id, content=fact, timestamp=datetime.now(timezone.utc)))
     await db.commit()
+
+    # Enforce cap: drop the oldest facts beyond the limit to keep context lean.
+    count = (await db.execute(
+        select(func.count()).select_from(MemoryFact).where(MemoryFact.user_id == user_id)
+    )).scalar() or 0
+    if count > FACT_MAX_PER_USER:
+        excess = count - FACT_MAX_PER_USER
+        oldest = (await db.execute(
+            select(MemoryFact).where(MemoryFact.user_id == user_id).order_by(MemoryFact.id).limit(excess)
+        )).scalars().all()
+        for row in oldest:
+            await db.delete(row)
+        await db.commit()
+
+
+def _content_to_text(content) -> str:
+    """Coerce LLM response content into a plain string.
+
+    Newer LangChain models may return a list of content blocks instead of a
+    plain str; handle both so fact extraction never silently drops a fact.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict):
+                parts.append(str(block.get("text", "") or block.get("content", "") or ""))
+        return "".join(parts)
+    return str(content)
 
 
 async def generate_fact_from_message(llm, user_message: str, assistant_reply: str) -> str | None:
     """Use LLM to extract a factual statement about the user from a conversation turn.
-    
+
     Only triggers when the user message suggests personal information keywords,
     to avoid unnecessary LLM calls on every chat message.
     """
     user_lower = user_message.lower()
-    trigger_keywords = ["我叫", "我是", "我喜欢", "我的名字", "我今年", "我住在", "我的职业",
-                        "我在", "我工作", "我学", "我出生", "我来自",
-                        "remember", "my name", "i am", "i like", "i work", "i study",
-                        "i live", "i'm"]
+    trigger_keywords = [
+        "我叫", "我是", "我喜欢", "我的名字", "我今年", "我住在", "我的职业",
+        "我工作", "我学", "我出生", "我来自", "我住", "我教", "我负责",
+        "我做", "我常", "我习惯", "我偏好", "我讨厌", "我不喜欢", "我擅长",
+        "记住", "请记住", "以后叫我", "我的邮箱", "我的电话", "我的生日",
+        "remember", "my name", "i am", "i like", "i work", "i study",
+        "i live", "i'm", "i prefer", "my favorite", "my birthday", "my email",
+    ]
     if not any(kw in user_lower for kw in trigger_keywords):
         return None
     try:
         from langchain_core.messages import SystemMessage, HumanMessage
         prompt = (
-            "从下面的对话中提取关于用户的事实信息，用一句话概括。"
-            "只输出事实内容，不要输出任何其他文字。如果不包含可提取信息请只输出'无'。\n\n"
+            "从下面的对话中提取关于用户的事实信息（如姓名、职业、偏好、联系方式等），用一句话自然概括。"
+            "只输出事实内容，不要任何前缀、冒号或多余文字；如果不包含可提取的稳定信息，只输出'无'。\n\n"
             f"用户: {user_message}\n助手: {assistant_reply}"
         )
         resp = await llm.ainvoke([
-            SystemMessage(content="你是一个信息提取助手。"),
+            SystemMessage(content="你是一个信息提取助手，从对话中提取关于用户的稳定事实。"),
             HumanMessage(content=prompt),
         ])
-        fact = resp.content.strip().strip('"').strip("'")
+        raw = _content_to_text(resp.content)
+        fact = raw.strip().strip('"').strip("'").strip()
+        for prefix in ("事实:", "事实：", "用户:", "用户："):
+            if fact.startswith(prefix):
+                fact = fact[len(prefix):].strip()
         if fact == "无" or len(fact) < 3:
             return None
         return fact[:200]

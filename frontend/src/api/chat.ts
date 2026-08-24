@@ -129,3 +129,15 @@ export async function searchMessages(convId: string, q: string): Promise<{ id: n
   return data.matches || []
 }
 
+export interface ChatSuggestion {
+  id: string
+  title: string
+  question: string
+  source: string
+}
+
+export async function fetchSuggestions(): Promise<ChatSuggestion[]> {
+  const { data } = await apiClient.get('/chat/suggestions')
+  return data.suggestions || []
+}
+

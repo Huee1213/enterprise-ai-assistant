@@ -378,6 +378,14 @@ async def update_user(
             raise HTTPException(status_code=400, detail="工号已被使用")
         user.employee_id = employee_id
     if avatar_url is not None:
+        # Only allow external http(s) URLs, the internal upload path, or empty
+        # (remove avatar). Blocks injection of arbitrary internal file routes.
+        if avatar_url and not (
+            avatar_url.startswith("/api/files/avatars/")
+            or avatar_url.startswith("http://")
+            or avatar_url.startswith("https://")
+        ):
+            raise HTTPException(status_code=400, detail="头像链接仅支持 http(s):// 地址或系统上传的头像")
         user.avatar_url = avatar_url
     if phone is not None:
         user.phone = phone

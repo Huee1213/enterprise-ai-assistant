@@ -1,3 +1,4 @@
+import os
 from fastapi import APIRouter, HTTPException, Depends, UploadFile
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -389,7 +390,7 @@ async def upload_avatar(
     current_user: dict = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    import os, asyncio
+    import asyncio
     if file.size and file.size > 5 * 1024 * 1024:
         raise HTTPException(status_code=400, detail="头像文件不能超过 5MB")
     upload_dir = os.path.join(os.path.dirname(__file__), "..", "..", "data", "avatars")

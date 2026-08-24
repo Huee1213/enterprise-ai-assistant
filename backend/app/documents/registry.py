@@ -45,6 +45,11 @@ def list_documents() -> List[DocumentInfo]:
     return [DocumentInfo(**e) for e in _load_registry()]
 
 
+def list_document_entries() -> list:
+    """Return raw registry entries (including stored chunk texts)."""
+    return _load_registry()
+
+
 def delete_document(doc_id: str) -> bool:
     registry = _load_registry()
     filtered = [e for e in registry if e["id"] != doc_id]

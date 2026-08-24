@@ -134,17 +134,9 @@ async def stream_rag(query: str, memory_context: str = "",
                 full_answer += chunk.content
                 yield f"data: {json.dumps({'event': 'token', 'data': chunk.content})}\n\n"
 
-        if db and user_id:
-            try:
-                from app.memory import add_user_fact, generate_fact_from_message
-                from langchain_openai import ChatOpenAI
-                fact_llm = ChatOpenAI(model=settings.llm_model, temperature=0.1, max_tokens=100, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-                fact = await generate_fact_from_message(fact_llm, query, full_answer)
-                if fact:
-                    await add_user_fact(db, user_id, fact)
-                    yield f"data: {json.dumps({'event': 'step', 'data': {'step': 0, 'action': 'memory', 'input': '', 'output': '已保存记忆: ' + fact, 'duration_ms': 0}})}\n\n"
-            except Exception:
-                pass
+        # NOTE: fact extraction for the RAG path is handled once by
+        # chat.py `_post_stream_tasks` (fires for both agent and RAG modes),
+        # so doing it here too would double the LLM calls. Removed deliberately.
 
         yield f"data: {json.dumps({'event': 'done', 'data': ''})}\n\n"
     except (GeneratorExit, asyncio.CancelledError):

@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import ChatContainer from '@/components/chat/ChatContainer.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import ThemeToggle from '@/components/layout/ThemeToggle.vue'
+import ProfileEditor from '@/components/common/ProfileEditor.vue'
 
 const chat = useChatStore()
 const auth = useAuthStore()
@@ -33,94 +34,10 @@ onMounted(async () => {
   await chat.loadConversations()
 })
 
-const showChatProfile = ref(false)
-const chatProfileTab = ref<'info' | 'avatar'>('info')
-const chatDisplayName = ref('')
-const chatPhone = ref('')
-const chatNewPassword = ref('')
-const chatNewPassword2 = ref('')
-const chatAvatarUrl = ref('')
-const chatProfileSaving = ref(false)
-const chatProfileError = ref('')
-const chatProfileSuccess = ref('')
-const chatAvatarFileInput = ref<HTMLInputElement | null>(null)
-const chatAvatarUploading = ref(false)
+const profileEditorRef = ref<InstanceType<typeof ProfileEditor> | null>(null)
 
-function generatePassword() {
-  const lower = 'abcdefghijklmnopqrstuvwxyz'
-  const upper = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
-  const digits = '0123456789'
-  const special = '!@#$%^&*()_+-=[]{};:,.<>?'
-  const pick = (s: string) => s[Math.floor(Math.random() * s.length)]
-  let pw = pick(lower) + pick(upper) + pick(digits) + pick(special)
-  const all = lower + upper + digits + special
-  for (let i = 0; i < 8; i++) pw += pick(all)
-  return pw.split('').sort(() => Math.random() - 0.5).join('')
-}
-
-const chatPwHasLower = computed(() => /[a-z]/.test(chatNewPassword.value))
-const chatPwHasUpper = computed(() => /[A-Z]/.test(chatNewPassword.value))
-const chatPwHasDigit = computed(() => /[0-9]/.test(chatNewPassword.value))
-const chatPwHasSpecial = computed(() => /[!@#$%^&*()_+\-=\[\]{};':",.<>\/?\\|]/.test(chatNewPassword.value))
-const chatPwLongEnough = computed(() => chatNewPassword.value.length >= 8)
-
-const chatPw2HasLower = computed(() => /[a-z]/.test(chatNewPassword2.value))
-const chatPw2HasUpper = computed(() => /[A-Z]/.test(chatNewPassword2.value))
-const chatPw2HasDigit = computed(() => /[0-9]/.test(chatNewPassword2.value))
-const chatPw2HasSpecial = computed(() => /[!@#$%^&*()_+\-=\[\]{};':",.<>\/?\\|]/.test(chatNewPassword2.value))
-const chatPw2LongEnough = computed(() => chatNewPassword2.value.length >= 8)
-
-function openChatProfile() {
-  chatDisplayName.value = auth.user?.display_name || ''
-  chatPhone.value = auth.user?.phone || ''
-  chatAvatarUrl.value = auth.user?.avatar_url || ''
-  chatProfileError.value = ''; chatProfileSuccess.value = ''
-  chatProfileTab.value = 'info'
-  showChatProfile.value = true
-}
-
-async function saveChatProfile() {
-  chatProfileError.value = ''; chatProfileSuccess.value = ''
-  if (chatNewPassword.value && chatNewPassword.value !== chatNewPassword2.value) {
-    chatProfileError.value = '两次密码输入不一致'; return
-  }
-  chatProfileSaving.value = true
-  try {
-    const updates: any = {}
-    if (chatDisplayName.value !== (auth.user?.display_name || '')) updates.display_name = chatDisplayName.value
-    if (chatPhone.value !== (auth.user?.phone || '')) updates.phone = chatPhone.value
-    if (chatNewPassword.value) updates.password = chatNewPassword.value
-    if (Object.keys(updates).length > 0) {
-      await auth.updateSelfProfile(updates)
-      chatProfileSuccess.value = '资料已更新'
-      chatNewPassword.value = ''; chatNewPassword2.value = ''
-      setTimeout(() => chatProfileSuccess.value = '', 2000)
-    }
-  } catch (err: any) { chatProfileError.value = err.response?.data?.detail || err.message || '更新失败' }
-  finally { chatProfileSaving.value = false }
-}
-
-async function uploadChatAvatar(file: File) {
-  if (!file.type.startsWith('image/')) { chatProfileError.value = '请选择图片文件'; return }
-  chatAvatarUploading.value = true; chatProfileError.value = ''
-  try {
-    const data = await auth.uploadAvatar(file)
-    chatAvatarUrl.value = data.url
-    chatProfileSuccess.value = '头像已更新'
-    setTimeout(() => chatProfileSuccess.value = '', 2000)
-  } catch (err: any) { chatProfileError.value = err.response?.data?.detail || err.message || '上传失败' }
-  finally { chatAvatarUploading.value = false }
-}
-
-async function saveChatAvatarUrl() {
-  if (!chatAvatarUrl.value.trim()) return
-  chatProfileError.value = ''; chatProfileSaving.value = true
-  try {
-    await auth.updateSelfProfile({ avatar_url: chatAvatarUrl.value.trim() })
-    chatProfileSuccess.value = '头像已更新'
-    setTimeout(() => chatProfileSuccess.value = '', 2000)
-  } catch (err: any) { chatProfileError.value = err.response?.data?.detail || err.message || '更新失败' }
-  finally { chatProfileSaving.value = false }
+function openProfileEditor() {
+  profileEditorRef.value?.open()
 }
 </script>
 
@@ -197,11 +114,11 @@ async function saveChatAvatarUrl() {
 
           <ThemeToggle />
           <div class="flex items-center gap-1.5 ml-1 pr-1 border-r border-border/50">
-            <div @click="!auth.isAdmin ? (openChatProfile(), chatProfileTab='avatar') : null" class="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary overflow-hidden shrink-0 cursor-pointer" :class="auth.isAdmin ? 'cursor-default' : 'cursor-pointer hover:ring-2 hover:ring-primary/30 transition-all'" :title="auth.isAdmin ? '请在管理后台修改' : '点击修改头像'">
+            <div @click="openProfileEditor" class="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-bold text-primary overflow-hidden shrink-0 cursor-pointer hover:ring-2 hover:ring-primary/30 transition-all" title="编辑个人资料">
               <img v-if="auth.user?.avatar_url" :src="auth.user.avatar_url" class="w-full h-full object-cover" @error="$event.target.style.display='none'" />
               <span v-else>{{ (auth.user?.display_name || auth.user?.username || '?')[0] }}</span>
             </div>
-            <span @click="!auth.isAdmin ? (openChatProfile(), chatProfileTab='info') : null" class="text-[11px] text-muted-foreground hidden sm:inline truncate max-w-[120px] cursor-pointer hover:text-foreground transition-colors" :class="auth.isAdmin ? 'cursor-default hover:text-muted-foreground pointer-events-none' : ''" :title="auth.isAdmin ? '请在管理后台修改' : '点击编辑资料'">{{ auth.user?.display_name || auth.user?.username }}</span>
+            <span class="text-[11px] text-muted-foreground hidden sm:inline truncate max-w-[120px]" title="个人资料">{{ auth.user?.display_name || auth.user?.username }}</span>
           </div>
           <button @click="auth.logout()" class="rounded-md p-1.5 text-muted-foreground hover:text-destructive hover:bg-accent transition-colors" title="退出登录">
             <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><polyline points="16 17 21 12 16 7" /><line x1="21" x2="9" y1="12" y2="12" /></svg>
@@ -296,66 +213,5 @@ async function saveChatAvatarUrl() {
     </div>
   </div>
 
-  <!-- Employee profile edit dialog -->
-  <Teleport to="body">
-    <div v-if="showChatProfile" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in" @click="showChatProfile = false">
-      <div class="bg-card border border-border rounded-xl w-full max-w-sm shadow-2xl animate-scale-in overflow-hidden" @click.stop>
-        <div class="px-5 py-4 border-b border-border flex items-center justify-between bg-muted/20">
-          <div class="flex items-center gap-2.5">
-            <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
-            </div>
-            <div><h2 class="text-sm font-semibold">个人资料</h2><p class="text-[10px] text-muted-foreground">{{ auth.user?.username }}</p></div>
-          </div>
-          <button @click="showChatProfile = false" class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
-        </div>
-        <div class="p-5 space-y-4 max-h-[70vh] overflow-y-auto">
-          <!-- Avatar tab -->
-          <div v-if="chatProfileTab === 'avatar'" class="space-y-3">
-            <div class="flex flex-col items-center gap-3">
-              <div class="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center text-2xl font-bold text-primary overflow-hidden ring-2 ring-border">
-                <img v-if="chatAvatarUrl" :src="chatAvatarUrl" class="w-full h-full object-cover" />
-                <span v-else>{{ (auth.user?.display_name || auth.user?.username || '?')[0] }}</span>
-              </div>
-              <div class="border-2 border-dashed rounded-xl p-4 w-full text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors" @click="chatAvatarFileInput?.click()">
-                <input ref="chatAvatarFileInput" type="file" accept="image/*" class="hidden" @change="chatAvatarFileInput?.files?.[0] && uploadChatAvatar(chatAvatarFileInput.files[0])" />
-                <svg v-if="!chatAvatarUploading" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" class="mx-auto mb-1 text-muted-foreground"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-                <div v-else class="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin mx-auto mb-1" />
-                <p class="text-xs text-muted-foreground">{{ chatAvatarUploading ? '上传中...' : '点击上传图片' }}</p>
-              </div>
-            </div>
-            <div class="relative"><div class="absolute inset-0 flex items-center"><div class="w-full border-t border-border" /></div><div class="relative flex justify-center"><span class="bg-card px-2 text-[10px] text-muted-foreground">或使用在线链接</span></div></div>
-            <div class="flex gap-2">
-              <input v-model="chatAvatarUrl" placeholder="https://example.com/avatar.png" class="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-              <button @click="saveChatAvatarUrl" :disabled="chatProfileSaving || !chatAvatarUrl.trim()" class="rounded-lg bg-primary text-primary-foreground px-3 text-xs font-medium hover:bg-primary/90 disabled:opacity-50 shrink-0">应用</button>
-            </div>
-            <p v-if="chatProfileError" class="text-xs text-destructive bg-destructive/5 rounded-lg px-3 py-2">{{ chatProfileError }}</p>
-            <p v-if="chatProfileSuccess && chatProfileTab === 'avatar'" class="text-xs text-green-600 dark:text-green-400 bg-green-500/5 rounded-lg px-3 py-2">{{ chatProfileSuccess }}</p>
-            <button @click="chatProfileTab = 'info'" class="w-full rounded-lg border border-border py-2 text-sm hover:bg-muted transition-colors">返回资料编辑</button>
-          </div>
-
-          <!-- Info tab -->
-          <div v-else class="space-y-3">
-            <div class="space-y-1"><label class="text-xs font-medium text-muted-foreground">用户名</label><input :value="auth.user?.username" disabled class="h-9 w-full rounded-lg border border-input bg-muted/50 px-3 text-sm text-muted-foreground" /></div>
-            <div class="space-y-1"><label class="text-xs font-medium text-muted-foreground">显示名称</label><input v-model="chatDisplayName" class="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></div>
-            <div class="space-y-1"><label class="text-xs font-medium text-muted-foreground">电话</label><input v-model="chatPhone" class="h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></div>
-            <div class="space-y-1"><label class="text-xs font-medium text-muted-foreground">新密码（留空不修改）</label><div class="flex gap-1"><input v-model="chatNewPassword" type="text" placeholder="留空则不修改" class="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /><button @click="chatNewPassword = generatePassword(); chatNewPassword2 = ''" class="h-9 rounded-lg border border-input bg-background px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted shrink-0">生成</button></div></div>
-            <div v-if="chatNewPassword" class="flex flex-wrap gap-1.5">
-              <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPwHasLower ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPwHasLower" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>小写</span>
-              <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPwHasUpper ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPwHasUpper" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>大写</span>
-              <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPwHasDigit ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPwHasDigit" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>数字</span>
-              <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPwHasSpecial ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPwHasSpecial" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>特殊字符</span>
-              <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPwLongEnough ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPwLongEnough" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>≥8位</span>
-            </div>
-            <div class="space-y-1"><label class="text-xs font-medium text-muted-foreground">确认新密码</label><input v-model="chatNewPassword2" type="text" :placeholder="chatNewPassword ? '再次输入新密码' : '留空则不修改'" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" />
-            <div v-if="chatNewPassword2" class="flex flex-wrap gap-1.5"><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPw2HasLower ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPw2HasLower" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>小写</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPw2HasUpper ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPw2HasUpper" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>大写</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPw2HasDigit ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPw2HasDigit" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>数字</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPw2HasSpecial ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPw2HasSpecial" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>特殊字符</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="chatPw2LongEnough ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="chatPw2LongEnough" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>≥8位</span></div></div>
-            <button @click="chatProfileTab = 'avatar'" class="w-full rounded-lg border border-border py-2 text-sm hover:bg-muted transition-colors">修改头像</button>
-            <p v-if="chatProfileError" class="text-xs text-destructive bg-destructive/5 rounded-lg px-3 py-2">{{ chatProfileError }}</p>
-            <p v-if="chatProfileSuccess && chatProfileTab === 'info'" class="text-xs text-green-600 dark:text-green-400 bg-green-500/5 rounded-lg px-3 py-2">{{ chatProfileSuccess }}</p>
-            <button @click="saveChatProfile" :disabled="chatProfileSaving" class="w-full rounded-lg bg-primary text-primary-foreground py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">{{ chatProfileSaving ? '保存中...' : '保存资料' }}</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </Teleport>
+  <ProfileEditor ref="profileEditorRef" />
 </template>

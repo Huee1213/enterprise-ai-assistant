@@ -1,6 +1,8 @@
 import json
 import uuid
 import asyncio
+import os
+from datetime import datetime
 from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -23,30 +25,24 @@ class TitleResponse(BaseModel):
     title: str
 
 
-def _get_llm():
-    import asyncio
-    try:
-        loop = asyncio.get_running_loop()
-        # Try to load effective config; fall back to env settings
-        task = asyncio.ensure_future(_load_chat_cfg())
-        cfg = loop.run_until_complete(task)
-        model = cfg.get("llm_model", settings.llm_model)
-        temp = float(cfg.get("llm_temperature", settings.llm_temperature))
-        mt = int(cfg.get("llm_max_tokens", settings.llm_max_tokens))
-        key = cfg.get("llm_api_key", settings.llm_api_key) or settings.llm_api_key
-        base = cfg.get("llm_api_base", settings.llm_api_base) or settings.llm_api_base
-    except Exception:
-        model, temp, mt, key, base = settings.llm_model, settings.llm_temperature, settings.llm_max_tokens, settings.llm_api_key, settings.llm_api_base
-    from langchain_openai import ChatOpenAI
-    return ChatOpenAI(model=model, temperature=temp, max_tokens=mt, api_key=key, base_url=base)
+async def _get_llm():
+    """Build a ChatOpenAI from the effective (DB + env) config.
 
-
-async def _load_chat_cfg() -> dict:
+    Uses a clean async load so the configured model/key is respected
+    even when called from an already-running event loop.
+    """
     try:
         from app.agent.runtime_config import get_effective_config
-        return await get_effective_config()
+        cfg = await get_effective_config()
     except Exception:
-        return {}
+        cfg = {}
+    model = cfg.get("llm_model", settings.llm_model)
+    temp = float(cfg.get("llm_temperature", settings.llm_temperature))
+    mt = int(cfg.get("llm_max_tokens", settings.llm_max_tokens))
+    key = cfg.get("llm_api_key", settings.llm_api_key) or settings.llm_api_key
+    base = cfg.get("llm_api_base", settings.llm_api_base) or settings.llm_api_base
+    from langchain_openai import ChatOpenAI
+    return ChatOpenAI(model=model, temperature=temp, max_tokens=mt, api_key=key, base_url=base)
 
 
 @router.post("/stream")
@@ -91,25 +87,22 @@ async def chat_stream(
         import asyncio as _aio
         loop = _aio.get_running_loop()
         # ── LLM-based fact extraction (in thread pool) ──
+        # Trigger gating lives inside generate_fact_from_message so there is a
+        # single source of truth for when a fact should be extracted.
         if user_msg and reply:
-            trigger_kw = ("我叫", "我是", "我喜欢", "我的名字", "我今年", "我住在", "我的职业",
-                         "我在", "我工作", "我学", "我出生", "我来自",
-                         "remember", "my name", "i am", "i like", "i work", "i study", "i live", "i'm")
-            if any(kw in user_msg.lower() for kw in trigger_kw):
-                def _sync_fact(um: str, ar: str) -> str | None:
-                    from langchain_openai import ChatOpenAI
-                    from langchain_core.messages import SystemMessage, HumanMessage
-                    from app.memory import generate_fact_from_message
-                    llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-                    import asyncio as _a
-                    return _a.run(generate_fact_from_message(llm, um, ar))
-                try:
-                    fact = await loop.run_in_executor(None, _sync_fact, user_msg, reply)
-                    if fact:
-                        async with AsyncSessionLocal() as bg_db:
-                            await add_user_fact(bg_db, user_id, fact)
-                except Exception:
-                    pass
+            def _sync_fact(um: str, ar: str) -> str | None:
+                from langchain_openai import ChatOpenAI
+                from app.memory import generate_fact_from_message
+                llm = ChatOpenAI(model=settings.llm_model, temperature=0.2, max_tokens=200, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
+                import asyncio as _a
+                return _a.run(generate_fact_from_message(llm, um, ar))
+            try:
+                fact = await loop.run_in_executor(None, _sync_fact, user_msg, reply)
+                if fact:
+                    async with AsyncSessionLocal() as bg_db:
+                        await add_user_fact(bg_db, user_id, fact)
+            except Exception:
+                pass
         # ── Summary generation (LLM, in a separate thread to not block the event loop) ──
         try:
             async with AsyncSessionLocal() as bg_db:
@@ -206,7 +199,6 @@ async def chat_simple(
     user_id = current_user["user_id"]
     conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
     memory_ctx = await build_memory_context(db, user_id, conv_id)
-    conv_id = request.conversation_id or f"conv_{uuid.uuid4().hex[:8]}"
 
     await save_message(db, user_id, conv_id, "user", request.message)
 
@@ -235,7 +227,7 @@ async def generate_title(request: TitleRequest, current_user: dict = Depends(get
         return TitleResponse(title="新对话")
     try:
         if settings.llm_api_key and settings.llm_api_key != "sk-your-key-here":
-            llm = _get_llm()
+            llm = await _get_llm()
             from langchain_core.messages import SystemMessage, HumanMessage
             prompt = (
                 "根据用户的第一条消息和AI的回复，生成一个简洁的对话标题（3-8个字）。"
@@ -252,6 +244,51 @@ async def generate_title(request: TitleRequest, current_user: dict = Depends(get
     except Exception:
         pass
     return TitleResponse(title=title)
+
+
+@router.get("/suggestions")
+async def chat_suggestions(
+    current_user: dict = Depends(get_current_user),
+    limit: int = 6,
+):
+    """Return starter questions derived from the knowledge base for the
+    empty-chat state. No LLM call is made — questions are built from the
+    uploaded documents in the registry."""
+    from app.documents.registry import list_document_entries
+
+    try:
+        entries = list_document_entries() or []
+    except Exception:
+        entries = []
+
+    suggestions = []
+    if entries:
+        def _ts(e: dict) -> datetime:
+            try:
+                return datetime.fromisoformat(str(e.get("uploaded_at", "")))
+            except Exception:
+                return datetime.min
+
+        ordered = sorted(entries, key=_ts, reverse=True)
+        for entry in ordered[: int(limit)]:
+            filename = str(entry.get("filename") or "")
+            stem = filename[: filename.rfind(".")] if "." in filename else filename
+            stem = stem.strip() or "该文档"
+            question = f"《{stem}》主要包含哪些内容？" if len(stem) <= 40 else "这份文档的主要内容是什么？"
+            suggestions.append({
+                "id": entry.get("id", ""),
+                "title": f"《{stem}》",
+                "question": question,
+                "source": filename,
+            })
+        suggestions.insert(0, {
+            "id": "__kb_overview__",
+            "title": "知识库概览",
+            "question": "知识库里有哪些文档？它们覆盖哪些主题？",
+            "source": "",
+        })
+
+    return {"suggestions": suggestions, "total": len(suggestions), "empty": not entries}
 
 
 # ── Conversation History API ───────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import apiClient from '@/api/client'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
 import { useAuthStore } from '@/stores/auth'
+import { isUploadedAvatar, isExternalImageUrl, avatarUrlInputValue } from '@/utils/avatar'
 const auth = useAuthStore()
 
 function groupBy<T>(arr: T[], key: keyof T): Record<string, T[]> {
@@ -488,6 +489,7 @@ async function handleCreate() {
 async function openEdit(user: UserInfo) {
   editUser.value = user
   editData.value = { display_name: user.display_name, employee_id: user.employee_id || '', avatar_url: user.avatar_url || '', phone: user.phone || '', password: '', password2: '' }
+  editAvatarUrlInput.value = avatarUrlInputValue(user.avatar_url)
   editError.value = ''; showEdit.value = true
 }
 
@@ -495,6 +497,7 @@ function closeEdit() { showEdit.value = false; editUser.value = null }
 
 const editAvatarFileInput = ref<HTMLInputElement | null>(null)
 const editAvatarUploading = ref(false)
+const editAvatarUrlInput = ref('')
 
 async function uploadEditAvatar(file: File) {
   if (!file.type.startsWith('image/')) { editError.value = '请选择图片文件'; return }
@@ -504,6 +507,7 @@ async function uploadEditAvatar(file: File) {
     form.append('file', file)
     const { data } = await apiClient.post('/auth/avatar', form)
     editData.value.avatar_url = data.url
+    editAvatarUrlInput.value = ''
   } catch (err: any) { editError.value = err.response?.data?.detail || err.message || '上传失败' }
   finally { editAvatarUploading.value = false }
 }
@@ -513,9 +517,13 @@ async function saveEdit() {
   if (editData.value.password && editData.value.password !== editData.value.password2) {
     editError.value = '两次密码输入不一致'; return
   }
+  const urlInput = editAvatarUrlInput.value.trim()
+  if (urlInput && !isExternalImageUrl(urlInput)) {
+    editError.value = '请输入以 http(s):// 开头的图片链接'; return
+  }
   const payload: any = { display_name: editData.value.display_name || editUser.value.username }
   if (editData.value.employee_id) payload.employee_id = editData.value.employee_id
-  if (editData.value.avatar_url) payload.avatar_url = editData.value.avatar_url
+  if (urlInput) payload.avatar_url = urlInput
   if (editData.value.phone) payload.phone = editData.value.phone
   if (editData.value.password) payload.password = editData.value.password
   try { await apiClient.put(`/auth/users/${editUser.value.id}`, payload); closeEdit(); await fetchUsers() }
@@ -1072,7 +1080,7 @@ async function executeClearUserData() {
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div class="space-y-1.5"><label class="text-xs font-medium text-muted-foreground">显示名称</label><input v-model="editData.display_name" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></div>
               <div class="space-y-1.5"><label class="text-xs font-medium text-muted-foreground">工号</label><input v-model="editData.employee_id" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></div>
-              <div class="sm:col-span-2 space-y-1.5"><label class="text-xs font-medium text-muted-foreground">头像 URL</label><div class="flex gap-1"><input v-model="editData.avatar_url" placeholder="https://example.com/avatar.png" class="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /><button @click="editAvatarFileInput?.click()" class="h-9 rounded-lg border border-input bg-background px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> 上传</button></div></div>
+              <div class="sm:col-span-2 space-y-1.5"><label class="text-xs font-medium text-muted-foreground">头像 URL</label><div class="flex gap-1"><input v-model="editAvatarUrlInput" placeholder="https://example.com/avatar.png" class="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /><button @click="editAvatarFileInput?.click()" class="h-9 rounded-lg border border-input bg-background px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg> 上传</button></div><p v-if="isUploadedAvatar(editData.avatar_url)" class="text-[10px] text-muted-foreground/70">当前为上传的头像，填写链接可切换为在线头像。</p></div>
               <div class="space-y-1.5"><label class="text-xs font-medium text-muted-foreground">电话</label><input v-model="editData.phone" class="flex h-9 w-full rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /></div>
               <div class="sm:col-span-2 space-y-1.5"><label class="text-xs font-medium text-muted-foreground">新密码（留空不修改）</label><div class="flex gap-1"><input v-model="editData.password" type="text" placeholder="留空则不修改" class="flex-1 h-9 rounded-lg border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" /><button @click="editData.password = generatePassword()" class="h-9 rounded-lg border border-input bg-background px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted shrink-0">生成</button></div>
               <div v-if="editData.password" class="flex flex-wrap gap-1.5"><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="editPwHasLower ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="editPwHasLower" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>小写</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="editPwHasUpper ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="editPwHasUpper" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>大写</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="editPwHasDigit ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="editPwHasDigit" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>数字</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="editPwHasSpecial ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="editPwHasSpecial" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>特殊字符</span><span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="editPwLongEnough ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'"><svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="editPwLongEnough" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>≥8位</span></div>

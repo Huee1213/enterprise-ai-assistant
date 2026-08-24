@@ -106,7 +106,9 @@ export const useAuthStore = defineStore('auth', () => {
   async function uploadAvatar(file: File) {
     const form = new FormData()
     form.append('file', file)
-    const { data } = await apiClient.post('/auth/avatar', form)
+    const { data } = await apiClient.post('/auth/avatar', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
     if (data.url && user.value) user.value.avatar_url = data.url
     return data
   }

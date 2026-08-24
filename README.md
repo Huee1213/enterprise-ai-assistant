@@ -27,7 +27,9 @@
 - **🐳 一键 Docker 部署** — 8 个容器一键启动
 - **🤖 LangChain 1.0 Agent** — 基于 `create_agent()` 构建，替代手工 StateGraph + ToolNode
 - **🔄 智能重生成** — 重生成仅覆盖对应消息（`deleteMessagesFrom`），不新增重复；仅最后一轮可重生成
-- **🧠 LLM 事实提取** — AI 根据对话内容生成结构化用户事实，替代关键词截取
+- **🧠 LLM 事实提取** — AI 根据对话内容生成结构化用户事实，替代关键词截取；同事实去重、单人上限 200 条、自动清理最旧
+- **🔍 空状态引导问题** — 知识库存在文档时，对话空状态展示基于文档生成的可点击建议问题（`GET /api/chat/suggestions`，无 LLM 调用）
+- **👤 统一个人资料编辑** — 单页 `ProfileEditor` 组件（员工端/管理端复用），点击头像进入；头像上传/在线链接/移除一体，上传头像不暴露内部存储路径，后端仅接受 http(s) 或系统上传路径
 - **🗂️ 后端分包** — `agent/`、`documents/`、`vector/` 三级包结构
 - **🔒 安全加固** — JWT 密钥必需环境变量；密码哈希与 JWT 密钥解耦；路径遍历防护；文件上传大小限制（文档 100MB / 头像 5MB）；异常信息防泄漏；异步线程池卸载阻塞操作
 
@@ -95,13 +97,14 @@ enterprise-ai-assistant/
 │   │   ├── router/index.ts      # 路由 + 守卫
 │   │   ├── stores/              # Pinia（chat, auth, theme, health）
 │   │   ├── api/                 # API 客户端 + SSE 流式
+│   │   ├── utils/               # 共享工具（avatar URL 安全等）
 │   │   ├── types/               # TypeScript 类型定义
 │   │   ├── components/
 │   │   │   ├── chat/            # ChatMessage, ChatInput, ChatContainer
 │   │   │   ├── documents/       # DocumentUpload, DocumentList
 │   │   │   ├── layout/          # Sidebar, ThemeToggle
 │   │   │   ├── agent/           # AgentPanel（实时推理预览）
-│   │   │   └── common/          # ConfirmDialog（通用确认弹窗）
+│   │   │   └── common/          # ConfirmDialog, ProfileEditor（通用弹窗/资料编辑）
 │   │   └── views/
 │   │       ├── ChatView.vue     # 员工/管理员聊天工作台
 │   │       ├── LoginView.vue    # 登录
@@ -233,6 +236,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `POST` | `/api/chat/stream` | JWT | — | 流式聊天（SSE） |
 | `POST` | `/api/chat/simple` | JWT | — | 非流式聊天 |
 | `POST` | `/api/chat/title` | JWT | — | 对话标题生成 |
+| `GET` | `/api/chat/suggestions` | JWT | — | 空状态引导问题（基于知识库） |
 | `GET` | `/api/chat/conversations` | JWT | — | 对话列表 |
 | `GET` | `/api/chat/conversations/{id}` | JWT | — | 对话消息历史 |
 | `DELETE` | `/api/chat/conversations/{id}` | JWT | — | 删除对话 |
@@ -336,7 +340,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | 类型 | 存储位置 | 说明 |
 |------|---------|------|
 | **短期记忆** | PostgreSQL `conversation_history` 表 | 当前对话窗口 + 自动摘要（每 6 条） |
-| **长期事实** | PostgreSQL `memory_facts` 表 | 用户关键信息，含关键词自动提取 |
+| **长期事实** | PostgreSQL `memory_facts` 表 | 用户关键信息，LLM 自动提取，同事实去重、每用户上限 200 条 |
 | **对话摘要** | PostgreSQL `conversation_summaries` 表 | 历史对话定期压缩摘要 |
 | **用户偏好** | PostgreSQL `users.preferences` 字段 | JSON 格式个人设置 |
 

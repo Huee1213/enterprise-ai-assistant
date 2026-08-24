@@ -2,6 +2,7 @@
 import { ref, computed, nextTick, watch as vueWatch, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
+import { fetchSuggestions, type ChatSuggestion } from '@/api/chat'
 import ChatMessage from './ChatMessage.vue'
 import ChatInput from './ChatInput.vue'
 import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
@@ -15,6 +16,27 @@ const confirmDeleteMsgContent = ref('')
 const msgContainerRef = ref<HTMLDivElement | null>(null)
 const msgRefs = ref<Map<string, HTMLElement>>(new Map())
 const scrollContainerRef = ref<HTMLDivElement | null>(null)
+
+// Knowledge-base starter questions (empty state)
+const suggestions = ref<ChatSuggestion[]>([])
+const suggestionsLoaded = ref(false)
+let suggestionsPromise: Promise<void> | null = null
+
+async function loadSuggestions() {
+  if (suggestionsLoaded.value) return
+  if (suggestionsPromise) return suggestionsPromise
+  suggestionsPromise = (async () => {
+    try {
+      suggestions.value = await fetchSuggestions()
+    } catch {
+      suggestions.value = []
+    } finally {
+      suggestionsLoaded.value = true
+      suggestionsPromise = null
+    }
+  })()
+  return suggestionsPromise
+}
 
 // Message search
 const showSearch = ref(false)
@@ -198,7 +220,10 @@ function onKeydown(e: KeyboardEvent) {
   }
 }
 
-onMounted(() => document.addEventListener('keydown', onKeydown))
+onMounted(() => {
+  document.addEventListener('keydown', onKeydown)
+  loadSuggestions()
+})
 onUnmounted(() => document.removeEventListener('keydown', onKeydown))
 
 function handleSend(message: string) {
@@ -264,7 +289,26 @@ defineExpose({ toggleSearch })
               <svg xmlns="http://www.w3.org/2000/svg" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-primary"><path d="M12 2a4 4 0 0 1 4 4v2a4 4 0 0 1-8 0V6a4 4 0 0 1 4-4Z" /><path d="M16 14H8a4 4 0 0 0-4 4v1a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-1a4 4 0 0 0-4-4Z" /></svg>
             </div>
             <h2 class="text-xl font-semibold mb-2">企业 AI 知识助手</h2>
-            <p class="text-sm text-muted-foreground max-w-md mb-8">{{ auth.isAdmin ? '上传企业文档后即可测试问答。' : '企业文档已就绪，开始提问吧。' }}</p>
+            <p class="text-sm text-muted-foreground max-w-md mb-6">{{ auth.isAdmin ? '上传企业文档后即可测试问答。' : '企业文档已就绪，开始提问吧。' }}</p>
+
+            <div v-if="suggestionsLoaded && suggestions.length > 0" class="w-full max-w-xl">
+              <p class="text-[11px] font-medium text-muted-foreground/60 mb-2">试试这些基于知识库的问题：</p>
+              <div class="flex flex-wrap justify-center gap-2">
+                <button
+                  v-for="s in suggestions"
+                  :key="s.id"
+                  @click="handleSend(s.question)"
+                  class="group inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3.5 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground hover:bg-primary/5 transition-colors cursor-pointer"
+                >
+                  <svg v-if="s.id === '__kb_overview__'" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary shrink-0"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-muted-foreground/50 group-hover:text-primary shrink-0"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+                  <span>{{ s.title }}</span>
+                </button>
+              </div>
+            </div>
+            <p v-else-if="suggestionsLoaded && suggestions.length === 0" class="text-xs text-muted-foreground/50">
+              {{ auth.isAdmin ? '知识库暂无文档，请先上传文档后刷新本页。' : '知识库暂无内容，请联系管理员上传文档。' }}
+            </p>
           </div>
         </template>
         <template v-else>

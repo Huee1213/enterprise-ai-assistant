@@ -16,7 +16,10 @@ def get_embeddings() -> Embeddings:
     if use_local:
         from langchain_community.embeddings import FastEmbedEmbeddings
         model_name = model.replace("local/", "", 1)
-        return FastEmbedEmbeddings(model_name=model_name)
+        # Explicit cache dir: Docker Desktop can pollute HOME (e.g. "C:UsersX"),
+        # which would break the default ~/.cache/fastembed lookup and force a
+        # (failing) runtime re-download. The model is baked into the image here.
+        return FastEmbedEmbeddings(model_name=model_name, cache_dir="/root/.cache/fastembed")
     else:
         from langchain_openai import OpenAIEmbeddings
         api_key = cfg.get("embedding_api_key", "") or settings.embedding_api_key or cfg.get("llm_api_key", "") or settings.llm_api_key
