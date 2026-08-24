@@ -163,43 +163,76 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
 
     try:
         step_num = 0
+        seen_tool_call_ids: set = set()
+        tool_args_by_id: dict = {}   # tool_call_id -> normalized args
         async for chunk in agent.astream(
             {"messages": messages},
             stream_mode=["messages", "updates"],
             version="v2",
         ):
             if chunk["type"] == "messages":
-                msg, metadata = chunk["data"]
+                msg, _metadata = chunk["data"]
                 if isinstance(msg, AIMessage):
-                    if msg.tool_calls:
-                        for tc in msg.tool_calls:
-                            step_num += 1
-                            step_data = {
-                                "step": step_num,
-                                "action": "llm_call",
-                                "input": str(tc.get("args", {})),
-                                "output": f"Calling {tc.get('name', 'unknown')}...",
-                                "duration_ms": 0,
-                            }
-                            yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
-                    # Streaming tokens — incremental content only, no full-text re-emission
+                    # Streaming tokens — incremental content only, no step emission.
+                    # Tool-call args in this stream are partial chunks, so llm_call
+                    # steps are emitted from the complete updates stream below.
                     if hasattr(msg, "text") and msg.text:
                         yield f"data: {json.dumps({'event': 'token', 'data': msg.text})}\n\n"
                     elif isinstance(msg.content, str) and msg.content:
                         yield f"data: {json.dumps({'event': 'token', 'data': msg.content})}\n\n"
             elif chunk["type"] == "updates":
                 for source, update in chunk["data"].items():
-                    # Only emit step/tool events from updates, NOT content
-                    if source == "tools":
-                        for tool_msg in update.get("messages", []):
-                            if hasattr(tool_msg, "content") and tool_msg.content:
+                    # Node key for the LLM turn is "model" in create_agent v1
+                    # (older versions use "agent"); accept both.
+                    if source in ("model", "agent"):
+                        # Complete LLM turn: emit ONE llm_call step per final tool call,
+                        # with fully-populated arguments (dedupe by tool_call.id).
+                        for am in update.get("messages", []):
+                            if not isinstance(am, AIMessage):
+                                continue
+                            for tc in (getattr(am, "tool_calls", None) or []):
+                                tc_name = tc.get("name") or ""
+                                if not tc_name:
+                                    continue
+                                tc_id = tc.get("id") or f"{tc_name}|{tc.get('index', '')}"
+                                args = tc.get("args") or {}
+                                if isinstance(args, str):
+                                    try:
+                                        args = json.loads(args)
+                                    except Exception:
+                                        pass
+                                tool_args_by_id[tc_id] = args
+                                if tc_id in seen_tool_call_ids:
+                                    continue
+                                seen_tool_call_ids.add(tc_id)
                                 step_num += 1
                                 step_data = {
                                     "step": step_num,
+                                    "action": "llm_call",
+                                    "name": tc_name,
+                                    "input": json.dumps(args, ensure_ascii=False),
+                                    "output": f"调用工具 {tc_name}",
+                                    "duration_ms": 0,
+                                    "ts": time.time(),
+                                }
+                                yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
+                    elif source == "tools":
+                        # Tool execution result — one step per ToolMessage, carrying
+                        # the parameters it was invoked with (linked by tool_call_id).
+                        for tool_msg in update.get("messages", []):
+                            if hasattr(tool_msg, "content") and tool_msg.content:
+                                step_num += 1
+                                tc_link = getattr(tool_msg, "tool_call_id", "") or ""
+                                args = tool_args_by_id.get(tc_link, {})
+                                step_data = {
+                                    "step": step_num,
                                     "action": "tool_execution",
-                                    "input": "",
+                                    "name": getattr(tool_msg, "name", "") or "",
+                                    "input": json.dumps(args, ensure_ascii=False)
+                                              if isinstance(args, (dict, list)) else str(args),
                                     "output": str(tool_msg.content)[:200],
                                     "duration_ms": 0,
+                                    "ts": time.time(),
                                 }
                                 yield f"data: {json.dumps({'event': 'step', 'data': step_data})}\n\n"
     except (GeneratorExit, asyncio.CancelledError):

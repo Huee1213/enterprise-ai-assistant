@@ -16,7 +16,7 @@
 - **🧠 长短期记忆系统** — PostgreSQL 持久化偏好/对话历史/自动摘要；LLM 事实提取去重、单人上限 200 条；摘要按对话隔离
 - **⚡ 非阻塞流式输出** — SSE 逐 Token 流式传输 + 独立线程池执行，Markdown 渲染 + 推理步骤实时可见
 - **📋 对话管理** — 单条删除/重生成/复制/改问，重生成仅覆盖对应消息；支持按标题检索历史对话、Ctrl+F 对话内搜索跳转
-- **🔎 Agent 调试面板** — 管理员实时查看每步推理（LLM 调用、工具执行、输入输出）
+- **🔎 Agent 调试面板** — 管理员按消息跟进查看逐步推理；步骤卡片（LLM 决策 / 工具执行）携带真实调用参数与结果、可筛选与详情弹窗；LLM 调用按工具调用去重统计，流式实时高亮；AI 回复在所有角色下统一显示紧凑状态条，详细过程收敛到调试面板
 - **🧠 空状态引导** — 基于知识库文档生成可点击的建议问题（`GET /api/chat/suggestions`，无额外 LLM 调用）
 - **👤 统一个人资料编辑** — 点击头像进入单页编辑，支持上传/在线链接/移除头像，不暴露内部存储路径
 - **📱 响应式布局 + 🌙 深色模式** — 桌面端侧栏可缩边（仅图标），移动端滑出式侧栏；持久主题切换 + 系统偏好检测
@@ -93,7 +93,7 @@ enterprise-ai-assistant/
 │   │   │   ├── chat/            # ChatMessage, ChatInput, ChatContainer
 │   │   │   ├── documents/       # DocumentUpload, DocumentList
 │   │   │   ├── layout/          # Sidebar, ThemeToggle
-│   │   │   ├── agent/           # AgentPanel（实时推理预览）
+│   │   │   ├── agent/           # AgentDebugPanel（按消息查看的调试面板）
 │   │   │   └── common/          # ConfirmDialog, ProfileEditor（通用弹窗/资料编辑）
 │   │   └── views/
 │   │       ├── ChatView.vue     # 员工/管理员聊天工作台

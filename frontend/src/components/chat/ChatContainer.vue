@@ -17,6 +17,10 @@ const msgContainerRef = ref<HTMLDivElement | null>(null)
 const msgRefs = ref<Map<string, HTMLElement>>(new Map())
 const scrollContainerRef = ref<HTMLDivElement | null>(null)
 
+// Which assistant message the Agent debug panel is currently following.
+const props = defineProps<{ followMsgId?: string }>()
+const emit = defineEmits<{ viewSteps: [msgId: string] }>()
+
 // Knowledge-base starter questions (empty state)
 const suggestions = ref<ChatSuggestion[]>([])
 const suggestionsLoaded = ref(false)
@@ -328,13 +332,14 @@ defineExpose({ toggleSearch })
             <ChatMessage
               :message="msg"
               :msgIndex="idx"
-              :isAdmin="auth.isAdmin"
               :isStreaming="chat.isStreaming && msg === chat.messages[chat.messages.length - 1] && msg.role === 'assistant'"
               :isLastMsg="idx === chat.messages.length - 1"
               :searchQuery="searchQuery"
+              :followed="props.followMsgId === msg.id"
               @edit="handleEdit"
               @retry="requestRetry"
               @delete-msg="requestDeleteMsg"
+              @view-steps="emit('viewSteps', $event)"
             />
           </div>
         </template>

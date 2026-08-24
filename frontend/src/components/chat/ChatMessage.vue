@@ -10,11 +10,11 @@ const props = defineProps<{
   message: Message
   isStreaming?: boolean
   msgIndex?: number
-  isAdmin?: boolean
   selectMode?: boolean
   selected?: boolean
   searchQuery?: string
   isLastMsg?: boolean
+  followed?: boolean
 }>()
 
 const emit = defineEmits<{
@@ -22,9 +22,11 @@ const emit = defineEmits<{
   retry: [msgId: string]
   deleteMsg: [msgId: string]
   toggleSelect: [msgId: string]
+  viewSteps: [msgId: string]
 }>()
 
-const expandedSteps = ref<Set<string>>(new Set())
+const isAdmin = computed(() => auth.isAdmin)
+
 const editing = ref(false)
 const editText = ref('')
 const copied = ref(false)
@@ -101,18 +103,6 @@ const renderedContent = computed(() => {
   if (!props.message.content) return ''
   return marked.parse(props.message.content, { async: false }) as string
 })
-
-function toggleStep(stepIdx: number) {
-  const key = `${props.message.id}-${stepIdx}`
-  const next = new Set(expandedSteps.value)
-  if (next.has(key)) next.delete(key)
-  else next.add(key)
-  expandedSteps.value = next
-}
-
-function isExpanded(stepIdx: number): boolean {
-  return expandedSteps.value.has(`${props.message.id}-${stepIdx}`)
-}
 
 function startEdit() {
   editText.value = props.message.content
@@ -249,70 +239,35 @@ const agentStatusText = computed(() => {
           <span class="w-2 h-2 rounded-full bg-muted-foreground/40 animate-pulse-dot" style="animation-delay: 0.4s" />
         </div>
 
-        <!-- Agent status: simplified for employees, full for admins -->
+        <!-- Agent status (same compact view for all roles; details live in Agent 调试面板) -->
         <div v-if="!isUser && message.steps && message.steps.length > 0" class="mb-3">
-          <!-- Simplified status for employees -->
-          <div v-if="!isAdmin" class="flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs bg-muted/40">
+          <button
+            type="button"
+            @click="emit('viewSteps', message.id)"
+            class="w-full flex items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-left transition-all"
+            :class="[
+              isAdmin
+                ? 'bg-muted/40 hover:bg-muted/70 hover:border-border cursor-pointer border border-transparent'
+                : 'bg-muted/40',
+              followed ? 'ring-1 ring-primary/40 bg-primary/5' : '',
+            ]"
+            :title="isAdmin ? '在调试面板查看该消息的 Agent 步骤' : undefined"
+          >
             <span v-if="isStreaming" class="shrink-0">
               <svg class="animate-spin text-primary" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
             </span>
             <span v-else class="shrink-0 text-green-500">✓</span>
-            <span class="text-muted-foreground">{{ agentStatusText }}</span>
-          </div>
-          <!-- Full steps for admins -->
-          <div v-else class="space-y-1">
-            <button
-              v-for="(step, i) in message.steps"
-              :key="i"
-              @click="toggleStep(i)"
-              class="w-full text-left rounded-lg px-2.5 py-1.5 text-xs font-mono transition-all animate-slide-in"
-              :style="{ animationDelay: `${i * 0.05}s` }"
-              :class="[
-                i === message.steps.length - 1 && isStreaming
-                  ? 'bg-primary/5 border border-primary/20 animate-pulse'
-                  : isExpanded(i)
-                    ? 'bg-muted border border-border'
-                    : 'bg-muted/40 hover:bg-muted/70 border border-transparent',
-              ]"
-            >
-              <div class="flex items-center gap-2">
-                <span v-if="step.action === 'llm_call'" class="shrink-0">
-                  <svg v-if="i === message.steps.length - 1 && isStreaming" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                </span>
-                <span v-else class="shrink-0">
-                  <svg v-if="i === message.steps.length - 1 && isStreaming" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-accent-foreground animate-spin"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                  <svg v-else xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-accent-foreground"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
-                </span>
-                <span class="flex-1 text-muted-foreground">
-                  {{ step.action === 'llm_call' ? 'LLM 调用' : '工具执行' }}
-                  <span class="text-muted-foreground/50">#{{ step.step }}</span>
-                </span>
-                <svg class="shrink-0 text-muted-foreground/40 transition-transform duration-200" :class="isExpanded(i) ? 'rotate-180' : ''" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9" /></svg>
-                <span v-if="i === message.steps.length - 1 && isStreaming" class="flex gap-0.5">
-                  <span class="w-1 h-1 rounded-full bg-muted-foreground/50 animate-pulse-dot" />
-                  <span class="w-1 h-1 rounded-full bg-muted-foreground/50 animate-pulse-dot" style="animation-delay: 0.2s" />
-                  <span class="w-1 h-1 rounded-full bg-muted-foreground/50 animate-pulse-dot" style="animation-delay: 0.4s" />
-                </span>
-              </div>
-              <div v-if="isExpanded(i)" class="mt-2 pt-2 border-t border-border/40 space-y-1.5">
-                <div>
-                  <div class="flex items-center gap-1 text-muted-foreground mb-0.5">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 7 4 4 20 4 20 7" /><line x1="9" x2="15" y1="20" y2="20" /><line x1="12" x2="12" y1="4" y2="20" /></svg>
-                    <span class="text-[10px] font-medium">输入</span>
-                  </div>
-                  <div class="p-1.5 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-16 overflow-y-auto leading-relaxed">{{ step.input.slice(0, 300) || '—' }}</div>
-                </div>
-                <div>
-                  <div class="flex items-center gap-1 text-muted-foreground mb-0.5">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12" /></svg>
-                    <span class="text-[10px] font-medium">输出</span>
-                  </div>
-                  <div class="p-1.5 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-16 overflow-y-auto leading-relaxed">{{ step.output.slice(0, 300) || '—' }}</div>
-                </div>
-              </div>
-            </button>
-          </div>
+            <span class="text-muted-foreground truncate">{{ agentStatusText }}</span>
+            <span v-if="message.steps.length > 0" class="ml-auto shrink-0 text-[10px] text-muted-foreground/50">{{ message.steps.length }} 步</span>
+            <span v-if="isAdmin" class="shrink-0 inline-flex items-center gap-0.5 text-[10px] text-muted-foreground/60">
+              <template v-if="followed">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-primary"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>查看中
+              </template>
+              <template v-else>
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/></svg>查看
+              </template>
+            </span>
+          </button>
         </div>
 
         <!-- Model reasoning / thinking (collapsible) -->

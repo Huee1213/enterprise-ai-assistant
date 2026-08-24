@@ -20,6 +20,8 @@ export interface AgentStep {
   input: string
   output: string
   duration_ms: number
+  name?: string
+  ts?: number
 }
 
 export interface Conversation {

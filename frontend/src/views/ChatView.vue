@@ -1,33 +1,46 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import { useRoute } from 'vue-router'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useChatStore } from '@/stores/chat'
 import { useAuthStore } from '@/stores/auth'
 import ChatContainer from '@/components/chat/ChatContainer.vue'
 import Sidebar from '@/components/layout/Sidebar.vue'
 import ThemeToggle from '@/components/layout/ThemeToggle.vue'
 import ProfileEditor from '@/components/common/ProfileEditor.vue'
+import AgentDebugPanel from '@/components/agent/AgentDebugPanel.vue'
 
 const chat = useChatStore()
 const auth = useAuthStore()
-const route = useRoute()
 const showDebug = ref(false)
 const mobileSidebarOpen = ref(false)
 const sidebarCollapsed = ref(false)
 const chatContainerRef = ref<InstanceType<typeof ChatContainer> | null>(null)
 
-const expandedSteps = ref<Set<string>>(new Set())
+// Which assistant message the Agent debug panel follows. '__latest__' = auto follow
+// the newest streaming/latest assistant message.
+const FOLLOW_LATEST = '__latest__'
+const followMsgId = ref<string>(FOLLOW_LATEST)
 
-function toggleStep(msgIdx: number, stepIdx: number) {
-  const key = `${msgIdx}-${stepIdx}`
-  const next = new Set(expandedSteps.value)
-  if (next.has(key)) next.delete(key); else next.add(key)
-  expandedSteps.value = next
+// Resizable debug panel width (desktop)
+const debugWidth = ref(440)
+let resizing = false
+function startResize(e: PointerEvent) {
+  if (e.button !== 0) return
+  resizing = true
+  window.addEventListener('pointermove', onResizeMove)
+  window.addEventListener('pointerup', stopResize)
+  e.preventDefault()
 }
-
-function isExpanded(msgIdx: number, stepIdx: number): boolean {
-  return expandedSteps.value.has(`${msgIdx}-${stepIdx}`)
+function onResizeMove(e: PointerEvent) {
+  if (!resizing) return
+  const w = window.innerWidth - e.clientX
+  debugWidth.value = Math.max(340, Math.min(820, w))
 }
+function stopResize() {
+  resizing = false
+  window.removeEventListener('pointermove', onResizeMove)
+  window.removeEventListener('pointerup', stopResize)
+}
+onUnmounted(stopResize)
 
 onMounted(async () => {
   chat.resetConversations()
@@ -126,7 +139,7 @@ function openProfileEditor() {
         </div>
       </header>
 
-      <ChatContainer ref="chatContainerRef" />
+      <ChatContainer ref="chatContainerRef" :follow-msg-id="followMsgId" @view-steps="followMsgId = $event" />
     </div>
 
     <!-- Agent debug panel -->
@@ -134,81 +147,28 @@ function openProfileEditor() {
       <!-- Mobile: slide-out drawer -->
       <template v-if="showDebug">
         <div class="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden" @click="showDebug = false" />
-        <div class="fixed inset-y-0 right-0 z-40 w-72 bg-card border-l border-border shadow-xl md:hidden flex flex-col">
-          <div class="flex items-center justify-between px-4 py-3 bg-card border-b border-border shrink-0">
-            <span class="text-xs font-semibold">Agent 调试</span>
-            <button @click="showDebug = false" class="rounded-md p-1 text-muted-foreground hover:text-foreground">
+        <div class="fixed inset-y-0 right-0 z-40 w-[88vw] max-w-[500px] bg-card border-l border-border shadow-xl md:hidden flex flex-col">
+          <div class="flex items-center justify-end px-3 pt-2 shrink-0">
+            <button @click="showDebug = false" class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted" title="关闭调试面板">
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
           </div>
-          <div class="flex-1 overflow-y-auto px-4 py-3 min-h-0">
-            <div v-if="chat.messages.length === 0" class="text-center text-muted-foreground text-sm py-8">暂无 Agent 活动</div>
-            <div v-for="(msg, msgIdx) in chat.messages" :key="msg.id" class="mb-4">
-              <div v-if="msg.role === 'assistant' && msg.steps && msg.steps.length > 0">
-                <p class="text-xs font-medium text-muted-foreground/70 mb-2">消息 {{ msgIdx + 1 }} · {{ msg.steps.length }} 步</p>
-                <div class="space-y-1.5">
-                  <button v-for="(step, stepIdx) in msg.steps" :key="`${msg.id}-${stepIdx}`" @click="toggleStep(msgIdx, stepIdx)"
-                    class="w-full text-left rounded-lg p-2.5 text-xs font-mono transition-all"
-                    :class="isExpanded(msgIdx, stepIdx) ? 'bg-muted border border-border shadow-sm' : 'bg-muted/40 hover:bg-muted/70 border border-transparent'">
-                    <div class="flex items-center gap-2.5">
-                      <span v-if="step.action === 'llm_call'" class="shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-primary"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-                      <span v-else class="shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent-foreground"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
-                      <div class="flex-1 min-w-0"><span class="font-medium text-foreground/90">{{ step.action === 'llm_call' ? 'LLM 调用' : '工具执行' }}</span><span class="text-muted-foreground ml-1.5">#{{ step.step }}</span></div>
-                      <svg class="shrink-0 text-muted-foreground transition-transform duration-200" :class="isExpanded(msgIdx, stepIdx) ? 'rotate-180' : ''" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                    </div>
-                    <div v-if="isExpanded(msgIdx, stepIdx)" class="mt-2.5 space-y-2 border-t border-border/50 pt-2.5">
-                      <div><div class="flex items-center gap-1 text-muted-foreground mb-1"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/></svg><span class="text-[10px] font-medium">输入</span></div><div class="p-2 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-20 overflow-y-auto leading-relaxed">{{ step.input.slice(0, 300) || '—' }}</div></div>
-                      <div><div class="flex items-center gap-1 text-muted-foreground mb-1"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span class="text-[10px] font-medium">输出</span></div><div class="p-2 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-20 overflow-y-auto leading-relaxed">{{ step.output.slice(0, 300) || '—' }}</div></div>
-                    </div>
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-          <div class="flex items-center justify-between px-4 py-3 border-t border-border bg-card shrink-0">
-            <span class="text-muted-foreground text-xs">Agent 模式</span>
-            <span class="text-xs font-medium" :class="chat.useAgentMode ? 'text-primary' : 'text-muted-foreground'">{{ chat.useAgentMode ? '开启' : '关闭（纯 RAG）' }}</span>
+          <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
+            <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" />
           </div>
         </div>
       </template>
-      <!-- Desktop: side panel -->
-      <div v-if="showDebug" class="hidden md:flex flex-col w-72 border-l border-border bg-card shrink-0 h-full relative">
-        <div class="p-4 border-b border-border shrink-0">
-          <h2 class="text-sm font-semibold flex items-center gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-primary"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
-            Agent 调试
-          </h2>
+      <!-- Desktop: resizable side panel -->
+      <div v-if="showDebug" class="hidden md:flex flex-col border-l border-border bg-card shrink-0 h-full relative overflow-hidden min-h-0" :style="{ width: debugWidth + 'px' }">
+        <!-- Drag handle -->
+        <div
+          @pointerdown="startResize"
+          class="absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize select-none group"
+          title="拖动调整面板宽度"
+        >
+          <div class="w-1 h-full mx-auto bg-transparent group-hover:bg-primary/50 group-active:bg-primary transition-colors" />
         </div>
-        <div class="flex-1 overflow-y-auto p-4">
-          <div v-if="chat.messages.length === 0" class="text-center text-muted-foreground text-sm py-8">暂无 Agent 活动</div>
-          <div v-for="(msg, msgIdx) in chat.messages" :key="msg.id" class="mb-4">
-            <div v-if="msg.role === 'assistant' && msg.steps && msg.steps.length > 0">
-              <p class="text-xs font-medium text-muted-foreground/70 mb-2">消息 {{ msgIdx + 1 }} · {{ msg.steps.length }} 步</p>
-              <div class="space-y-1.5">
-                <button v-for="(step, stepIdx) in msg.steps" :key="`${msg.id}-${stepIdx}`" @click="toggleStep(msgIdx, stepIdx)"
-                  class="w-full text-left rounded-lg p-2.5 text-xs font-mono transition-all"
-                  :class="isExpanded(msgIdx, stepIdx) ? 'bg-muted border border-border shadow-sm' : 'bg-muted/40 hover:bg-muted/70 border border-transparent'">
-                  <div class="flex items-center gap-2.5">
-                    <span v-if="step.action === 'llm_call'" class="shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-primary"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
-                    <span v-else class="shrink-0"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-accent-foreground"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg></span>
-                    <div class="flex-1 min-w-0"><span class="font-medium text-foreground/90">{{ step.action === 'llm_call' ? 'LLM 调用' : '工具执行' }}</span><span class="text-muted-foreground ml-1.5">#{{ step.step }}</span></div>
-                    <svg class="shrink-0 text-muted-foreground transition-transform duration-200" :class="isExpanded(msgIdx, stepIdx) ? 'rotate-180' : ''" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-                  </div>
-                  <div v-if="isExpanded(msgIdx, stepIdx)" class="mt-2.5 space-y-2 border-t border-border/50 pt-2.5">
-                    <div><div class="flex items-center gap-1 text-muted-foreground mb-1"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" x2="15" y1="20" y2="20"/><line x1="12" x2="12" y1="4" y2="20"/></svg><span class="text-[10px] font-medium">输入</span></div><div class="p-2 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-20 overflow-y-auto leading-relaxed">{{ step.input.slice(0, 300) || '—' }}</div></div>
-                    <div><div class="flex items-center gap-1 text-muted-foreground mb-1"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg><span class="text-[10px] font-medium">输出</span></div><div class="p-2 rounded bg-background/60 text-muted-foreground text-[10px] break-words whitespace-pre-wrap max-h-20 overflow-y-auto leading-relaxed">{{ step.output.slice(0, 300) || '—' }}</div></div>
-                  </div>
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="p-3 border-t border-border">
-          <div class="flex items-center justify-between text-xs">
-            <span class="text-muted-foreground">Agent 模式</span>
-            <span class="font-medium" :class="chat.useAgentMode ? 'text-primary' : 'text-muted-foreground'">{{ chat.useAgentMode ? '开启' : '关闭（纯 RAG）' }}</span>
-          </div>
-        </div>
+        <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" />
       </div>
     </div>
   </div>
