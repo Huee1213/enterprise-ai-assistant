@@ -15,9 +15,15 @@ class KnowledgeSearchTool(BaseTool):
     name: str = "knowledge_search"
     description: str = "Search the enterprise knowledge base for relevant information."
     args_schema: Type[BaseModel] = KnowledgeSearchInput
+    top_k: int = 5
+    score_threshold: float = 0.0
 
     def _run(self, query: str) -> str:
-        docs: List[Document] = similarity_search(query, k=5)
+        docs: List[Document] = similarity_search(
+            query,
+            k=max(1, int(self.top_k)),
+            threshold=float(self.score_threshold or 0.0),
+        )
         if not docs:
             return "No relevant documents found in the knowledge base."
         results = []
@@ -128,10 +134,48 @@ class GetCurrentTimeTool(BaseTool):
         return self._run()
 
 
-def get_tools() -> List[BaseTool]:
-    return [
-        KnowledgeSearchTool(),
-        WebSearchTool(),
-        SummarizeTool(),
-        GetCurrentTimeTool(),
-    ]
+def get_tools(cfg: dict | None = None) -> List[BaseTool]:
+    """Build the toolset honouring the effective agent config.
+
+    Toggles (enable_web_search / enable_knowledge_search / enable_summarize /
+    enable_time_tool) and top_k come from the saved config; when called from a
+    thread (no running loop) the effective config is loaded from DB.
+    """
+    if cfg is None:
+        cfg = _load_cfg_sync()
+    cfg = cfg or {}
+    def _flag(key: str, default: bool = True) -> bool:
+        v = cfg.get(key)
+        if isinstance(v, bool):
+            return v
+        return default
+
+    tools: List[BaseTool] = []
+    if _flag("enable_knowledge_search"):
+        tools.append(KnowledgeSearchTool(
+            top_k=int(cfg.get("top_k", 5) or 5),
+            score_threshold=float(cfg.get("score_threshold", 0.0) or 0.0),
+        ))
+    if _flag("enable_web_search"):
+        tools.append(WebSearchTool())
+    if _flag("enable_summarize"):
+        tools.append(SummarizeTool())
+    if _flag("enable_time_tool"):
+        tools.append(GetCurrentTimeTool())
+    return tools
+
+
+def _load_cfg_sync() -> dict:
+    """Load effective config synchronously (safe to call from any thread)."""
+    import asyncio as _a
+    try:
+        _a.get_running_loop()
+    except RuntimeError:
+        # Worker thread: run a dedicated loop.
+        loop = _a.new_event_loop()
+        try:
+            from app.agent.runtime_config import get_effective_config
+            return loop.run_until_complete(get_effective_config())
+        finally:
+            loop.close()
+    return {}

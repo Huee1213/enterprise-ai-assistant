@@ -9,7 +9,7 @@
 - **🔐 用户认证与角色权限** — JWT 双角色（管理员/员工），管理员管理知识库与用户，员工使用问答
 - **🔑 细粒度权限系统** — 文档/用户/权限/Agent 等维度权限控制，权限修改即时生效，无需重新登录
 - **🔐 Redis 令牌管理** — 多设备登录冲突检测，支持强制登录（409 弹窗 + 401 跨设备踢出）
-- **🔧 智能体配置管理** — 可视化配置 LLM（供应商/模型/密钥/Temperature）、向量嵌入（本地 ONNX/远程/与 LLM 一致）、检索参数与 Agent 行为；API Key 全程掩码，不可查看明文
+- **🔧 智能体配置管理** — 可视化配置 LLM（供应商/模型/密钥/Temperature）、向量嵌入（本地 ONNX/远程/与 LLM 一致）、检索参数与 Agent 行为；API Key 全程掩码，不可查看明文；每项配置带功能描述（悬停/点击问号或文字即显示说明）；保存后立即生效（无需重启），工具开关/检索阈值/系统提示词/最大轮次均在运行时强制
 - **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV 多文件批量上传（单文件最大 100MB）、向量检索问答、多选删除、原文预览
 - **🤖 LangGraph Agent 工作流** — 基于 LangChain 1.0 `create_agent()` 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
 - **🔍 本地搜索引擎 (SearXNG)** — 自托管元搜索引擎，聚合 Google/Bing/Brave/Startpage 等，无需 API Key
@@ -94,7 +94,7 @@ enterprise-ai-assistant/
 │   │   │   ├── documents/       # DocumentUpload, DocumentList
 │   │   │   ├── layout/          # Sidebar, ThemeToggle
 │   │   │   ├── agent/           # AgentDebugPanel（按消息查看的调试面板）
-│   │   │   └── common/          # ConfirmDialog, ProfileEditor（通用弹窗/资料编辑）
+│   │   │   └── common/          # ConfirmDialog, ProfileEditor, ConfigTooltip（通用弹窗/资料编辑/配置描述）
 │   │   └── views/
 │   │       ├── ChatView.vue     # 员工/管理员聊天工作台
 │   │       ├── LoginView.vue    # 登录

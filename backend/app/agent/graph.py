@@ -39,6 +39,17 @@ async def _load_effective_config() -> dict:
     return _effective_config
 
 
+def invalidate_effective_config():
+    """Force the next chat call to re-read the effective config.
+
+    Called by the config save/reset endpoints so changes take effect
+    immediately instead of waiting for the TTL cache to expire.
+    """
+    global _effective_config, _config_loaded_at
+    _effective_config = {}
+    _config_loaded_at = 0
+
+
 def _build_chat_model(cfg: dict):
     return ChatOpenAI(
         model=cfg.get("llm_model", settings.llm_model),
@@ -70,8 +81,9 @@ DYNAMIC_SYSTEM = (
 
 
 def _build_messages(query: str, memory_context: str = "",
-                    history_ctx: str = "") -> list:
-    parts = [DYNAMIC_SYSTEM]
+                    history_ctx: str = "", system_prompt: str = "") -> list:
+    base = (system_prompt or "").strip() or DYNAMIC_SYSTEM
+    parts = [base]
     if memory_context:
         parts.append(f"User context:\n{memory_context}")
     if history_ctx:
@@ -111,7 +123,11 @@ async def stream_rag(query: str, memory_context: str = "",
         from app.vector.store import similarity_search
         llm = _build_chat_model(cfg)
         loop = asyncio.get_running_loop()
-        docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
+        docs = await loop.run_in_executor(
+            None, similarity_search, query,
+            int(cfg.get("top_k", settings.top_k)),
+            float(cfg.get("score_threshold", 0.0) or 0.0),
+        )
         context = "\n\n".join(
             f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
         ) if docs else "No relevant documents found."
@@ -155,11 +171,12 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
     llm = _build_chat_model(cfg)
     agent = create_agent(
         model=llm,
-        tools=get_tools(),
+        tools=get_tools(cfg),
         name="enterprise_agent",
     )
 
-    messages = _build_messages(query, memory_context, history_ctx)
+    messages = _build_messages(query, memory_context, history_ctx, cfg.get("system_prompt", ""))
+    max_rounds = int(cfg.get("max_tool_rounds", 5) or 5)
 
     try:
         step_num = 0
@@ -167,6 +184,7 @@ async def stream_agent(query: str, conv_id: str, memory_context: str = "",
         tool_args_by_id: dict = {}   # tool_call_id -> normalized args
         async for chunk in agent.astream(
             {"messages": messages},
+            config={"recursion_limit": max(1, max_rounds * 2)},
             stream_mode=["messages", "updates"],
             version="v2",
         ):
@@ -253,7 +271,11 @@ async def run_rag(query: str, memory_context: str = "") -> dict:
     llm = _build_chat_model(cfg)
     from app.vector.store import similarity_search
     loop = asyncio.get_running_loop()
-    docs = await loop.run_in_executor(None, similarity_search, query, int(cfg.get("top_k", settings.top_k)))
+    docs = await loop.run_in_executor(
+        None, similarity_search, query,
+        int(cfg.get("top_k", settings.top_k)),
+        float(cfg.get("score_threshold", 0.0) or 0.0),
+    )
     context = "\n\n".join(
         f"[Source: {d.metadata.get('source', 'Unknown')}]\n{d.page_content}" for d in docs
     ) if docs else "No relevant documents found."
@@ -274,11 +296,15 @@ async def run_agent(query: str, memory_context: str = "", history_ctx: str = "",
     llm = _build_chat_model(cfg)
     agent = create_agent(
         model=llm,
-        tools=get_tools(),
+        tools=get_tools(cfg),
         name="enterprise_agent",
     )
 
-    messages = _build_messages(query, memory_context, history_ctx)
-    result = await agent.ainvoke({"messages": messages})
+    messages = _build_messages(query, memory_context, history_ctx, cfg.get("system_prompt", ""))
+    max_rounds = int(cfg.get("max_tool_rounds", 5) or 5)
+    result = await agent.ainvoke(
+        {"messages": messages},
+        config={"recursion_limit": max(1, max_rounds * 2)},
+    )
     answer = result["messages"][-1].content if isinstance(result["messages"][-1], AIMessage) else str(result["messages"][-1])
     return {"conversation_id": conversation_id, "answer": answer, "steps": []}

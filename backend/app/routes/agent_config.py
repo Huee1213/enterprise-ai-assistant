@@ -168,6 +168,13 @@ async def update_agent_config(
         ))
     await db.commit()
 
+    # Invalidate the per-worker config cache so the new values apply immediately.
+    try:
+        from app.agent.graph import invalidate_effective_config
+        invalidate_effective_config()
+    except Exception:
+        pass
+
     effective = dict(DEFAULT_CONFIG)
     effective.update(existing)
 
@@ -191,6 +198,11 @@ async def reset_agent_config(
 
     await db.execute(sql_delete(AgentConfig))
     await db.commit()
+    try:
+        from app.agent.graph import invalidate_effective_config
+        invalidate_effective_config()
+    except Exception:
+        pass
     reset_cfg = dict(DEFAULT_CONFIG)
     reset_cfg["llm_api_key"] = _mask_api_key(reset_cfg.get("llm_api_key", ""))
     reset_cfg["embedding_api_key"] = _mask_api_key(reset_cfg.get("embedding_api_key", ""))
@@ -310,6 +322,9 @@ async def fetch_models(
     except httpx.HTTPStatusError as e:
         logger.warning("fetch models HTTP %s for %s: %.200s", e.response.status_code, provider, e.response.text)
         raise HTTPException(status_code=502, detail=f"API 请求失败 ({e.response.status_code})")
+    except HTTPException:
+        # Already a proper client error (400/403/...); don't mask it as 500.
+        raise
     except httpx.RequestError:
         logger.warning("fetch models connection failed: %s", provider)
         raise HTTPException(status_code=502, detail="无法连接到 API 服务")

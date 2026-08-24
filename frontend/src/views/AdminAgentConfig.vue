@@ -1,10 +1,35 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue'
 import apiClient from '@/api/client'
+import ConfigTooltip from '@/components/common/ConfigTooltip.vue'
 
 interface ModelItem {
   id: string
   name: string
+}
+
+// Field-level usage descriptions shown via the help icon tooltip.
+const FIELD_DESC: Record<string, string> = {
+  llm_provider: '选择大语言模型的供应商（OpenAI / DeepSeek / OpenRouter / Anthropic / Ollama / 自定义）。切换后需按对应服务的接入信息填写密钥与地址。',
+  llm_api_key: '调用大语言模型的人力 API 密钥。保存后以掩码形式显示，不会回显明文；修改时需重新输入完整密钥。',
+  llm_api_base: '模型服务的接口基础地址，需与所选供应商匹配（如 OpenAI 为 https://api.openai.com/v1）。',
+  llm_model: '实际用于对话生成与 Agent 推理的模型名称。可点击刷新从供应商拉取当前可用模型列表。',
+  llm_temperature: '控制回答随机性（0-2）。值越低回答越稳定保守，适合知识问答；越高越有创意，适合头脑风暴。',
+  llm_max_tokens: '单次生成的最大 Token 数上限。过大会增加响应延迟与成本，建议 2048-4096。',
+  embedding_provider: '文档向量化所用嵌入模型的服务来源：本地模型（离线、无需密钥）/ OpenAI 兼容 / 与 LLM 供应商一致。切换后需重新索引文档。',
+  embedding_api_key: '远程嵌入服务的 API 密钥。本地模式无需填写。',
+  embedding_api_base: '远程嵌入服务的接口地址（如 OpenAI https://api.openai.com/v1）。本地模式无需填写。',
+  embedding_model: '向量嵌入模型名称，用于将文档分块转为向量。切换后将影响检索效果，需重新索引知识库。',
+  top_k: '检索知识库时返回的文本块数量（1-20）。值越大上下文越丰富但 Token 消耗越高，建议 3-8。',
+  score_threshold: '相似度阈值（0-1）。低于该相似度的检索结果将被过滤丢弃。值过低引入噪声、过高遗漏相关信息，建议 0.3-0.5。',
+  chunk_size: '文档切块时的每块字符数。过小丢失跨句上下文，过大降低检索精度，建议 500-1000。',
+  chunk_overlap: '相邻块之间的重叠字符数，用于保留跨块信息，建议为块大小的 10%-20%。',
+  system_prompt: '自定义 AI 助手的系统提示词，设定回复风格与行为边界。留空使用内置默认提示词。',
+  enable_web_search: '是否允许 Agent 调用网页搜索工具（通过自托管 SearXNG）获取实时网络信息。',
+  enable_knowledge_search: '是否允许 Agent 检索企业知识库文档用于回答。关闭后 AI 无法引用上传的文档。',
+  enable_summarize: '是否允许 Agent 对长文本生成摘要。',
+  enable_time_tool: '是否允许 Agent 查询当前日期时间（基于服务器时区）。',
+  max_tool_rounds: 'Agent 单轮回复中允许的最大工具调用轮次（1-10）。过大可能导致 Agent 陷入循环、响应变慢，建议 3-5。',
 }
 
 const config = ref<Record<string, any>>({})
@@ -91,8 +116,8 @@ const canReset = computed(() => {
 })
 
 const hasKeyEdit = computed(() => {
-  return (keyEditing && llmApiKey.value && !llmApiKey.value.includes('•')) ||
-         (embKeyEditing && embApiKey.value && !embApiKey.value.includes('•'))
+  return (llmApiKey.value && !llmApiKey.value.includes('•')) ||
+         (embApiKey.value && !embApiKey.value.includes('•'))
 })
 
 function isModified(key: string): boolean {
@@ -495,7 +520,7 @@ onMounted(loadConfig)
         <div class="px-5 py-4 space-y-4">
           <!-- Provider selector -->
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">服务提供商</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="服务提供商" :text="FIELD_DESC.llm_provider" /></div>
             <select v-model="llmProvider" @change="onProviderChange"
               class="w-56 h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30">
               <option value="openai">OpenAI</option>
@@ -509,7 +534,7 @@ onMounted(loadConfig)
 
           <!-- API Key -->
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">API Key</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="API Key" :text="FIELD_DESC.llm_api_key" /></div>
             <div class="w-56 flex items-center gap-1.5">
               <div class="relative flex-1 min-w-0">
                 <input
@@ -544,7 +569,7 @@ onMounted(loadConfig)
 
           <!-- API Base -->
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">API Base URL</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="API Base URL" :text="FIELD_DESC.llm_api_base" /></div>
             <div class="w-56">
               <input v-model="llmApiBase" type="text" placeholder="https://api.openai.com/v1" data-revert="llm_api_base" @blur="revertOnBlur"
                 class="w-full h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30" />
@@ -555,7 +580,7 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">模型名称</label>
+                <ConfigTooltip label="模型名称" :text="FIELD_DESC.llm_model" />
                 <span v-if="isModified('llm_model')" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -595,7 +620,7 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">Temperature</label>
+                <ConfigTooltip label="Temperature" :text="FIELD_DESC.llm_temperature" />
                 <span v-if="isModified('llm_temperature')" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -610,7 +635,7 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">最大 Token 数</label>
+                <ConfigTooltip label="最大 Token 数" :text="FIELD_DESC.llm_max_tokens" />
                 <span v-if="isModified('llm_max_tokens')" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -635,7 +660,7 @@ onMounted(loadConfig)
         <div class="px-5 py-4 space-y-4">
           <!-- Embedding provider -->
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">嵌入供应商</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="嵌入供应商" :text="FIELD_DESC.embedding_provider" /></div>
             <select v-model="embProvider" @change="onEmbProviderChange"
               class="w-56 h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/30">
               <option value="same-as-llm">与 LLM 供应商一致</option>
@@ -647,7 +672,7 @@ onMounted(loadConfig)
 
           <!-- Embedding API Key (only for remote) -->
           <div v-if="embProvider !== 'local'" class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">Embedding API Key</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="Embedding API Key" :text="FIELD_DESC.embedding_api_key" /></div>
             <div class="w-56 flex items-center gap-1.5">
               <div class="relative flex-1 min-w-0">
                 <input v-if="embKeyEditing" v-model="embApiKey" :type="embKeyVisible ? 'text' : 'password'" placeholder="sk-..." @blur="onEmbKeyBlur"
@@ -668,7 +693,7 @@ onMounted(loadConfig)
 
           <!-- Embedding API Base (only for remote) -->
           <div v-if="embProvider !== 'local'" class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">Embedding API Base</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="Embedding API Base" :text="FIELD_DESC.embedding_api_base" /></div>
             <div class="w-56">
               <input v-model="embApiBase" type="text" placeholder="https://api.openai.com/v1" data-revert="embedding_api_base" @blur="revertOnBlur"
                 class="w-full h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30" />
@@ -679,7 +704,7 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">嵌入模型</label>
+                <ConfigTooltip label="嵌入模型" :text="FIELD_DESC.embedding_model" />
                 <span v-if="isModified('embedding_model')" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -725,7 +750,7 @@ onMounted(loadConfig)
             class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">{{ f.label }}</label>
+                <ConfigTooltip :label="f.label" :text="FIELD_DESC[f.key] || '配置项说明'" />
                 <span v-if="isModified(f.key)" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -739,7 +764,7 @@ onMounted(loadConfig)
             class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0">
               <div class="flex items-center gap-2">
-                <label class="text-sm font-medium">{{ f.label }}</label>
+                <ConfigTooltip :label="f.label" :text="FIELD_DESC[f.key] || '配置项说明'" />
                 <span v-if="isModified(f.key)" class="w-1.5 h-1.5 rounded-full bg-amber-500 shrink-0" />
               </div>
             </div>
@@ -763,7 +788,7 @@ onMounted(loadConfig)
         </div>
         <div class="px-5 py-4 space-y-4">
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">系统提示词 (System Prompt)</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="系统提示词 (System Prompt)" :text="FIELD_DESC.system_prompt" /></div>
             <div class="w-56">
               <input v-model="config.system_prompt" type="text" placeholder="留空使用默认系统提示词" data-revert="system_prompt" @blur="revertOnBlur"
                 class="w-full h-8 rounded-md border border-input bg-background px-3 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30" />
@@ -771,7 +796,7 @@ onMounted(loadConfig)
           </div>
           <div v-for="f in [{key:'enable_web_search',label:'网页搜索'},{key:'enable_knowledge_search',label:'知识库检索'},{key:'enable_summarize',label:'摘要生成'},{key:'enable_time_tool',label:'时间查询'}]" :key="f.key"
             class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">{{ f.label }}</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip :label="f.label" :text="FIELD_DESC[f.key] || '配置项说明'" /></div>
             <button @click="config[f.key] = !config[f.key]"
               class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors"
               :class="config[f.key] ? 'bg-primary' : 'bg-input'" role="switch" :aria-checked="config[f.key]">
@@ -780,7 +805,7 @@ onMounted(loadConfig)
             </button>
           </div>
           <div class="flex items-center justify-between gap-4">
-            <div class="flex-1 min-w-0"><label class="text-sm font-medium">最大工具调用轮次</label></div>
+            <div class="flex-1 min-w-0"><ConfigTooltip label="最大工具调用轮次" :text="FIELD_DESC.max_tool_rounds" /></div>
             <div class="w-56 flex items-center gap-3">
               <input v-model.number="config.max_tool_rounds" type="range" min="1" max="10" step="1"
                 class="flex-1 h-1.5 appearance-none rounded-full bg-muted-foreground/20 accent-primary cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-3.5 [&::-webkit-slider-thumb]:h-3.5 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:bg-primary [&::-webkit-slider-thumb]:shadow-sm [&::-webkit-slider-thumb]:cursor-pointer" />

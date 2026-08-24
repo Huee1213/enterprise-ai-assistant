@@ -1,5 +1,5 @@
 import logging
-from typing import List, Optional
+from typing import List, Optional, Callable
 from langchain_milvus import Milvus
 from langchain_core.documents import Document
 from app.config import settings
@@ -10,26 +10,72 @@ logger = logging.getLogger("vector_store")
 _vector_store: Optional[Milvus] = None
 
 
-def get_vector_store() -> Milvus:
+def get_vector_store(reuse: bool = True) -> Milvus:
+    """Return the cached vector store, optionally rebuilding it.
+
+    `reuse=False` forces a fresh Milvus wrapper with the current embedding
+    config, so switching embedding model/key on the config page takes effect
+    without a process restart.
+    """
     global _vector_store
-    if _vector_store is None:
-        embeddings = get_embeddings()
-        _vector_store = Milvus(
-            embedding_function=embeddings,
-            collection_name=settings.milvus_collection,
-            connection_args={"uri": settings.milvus_uri},
-            auto_id=True,
-            drop_old=False,
-        )
-    return _vector_store
+    if reuse and _vector_store is not None:
+        return _vector_store
+    embeddings = get_embeddings()
+    store = Milvus(
+        embedding_function=embeddings,
+        collection_name=settings.milvus_collection,
+        connection_args={"uri": settings.milvus_uri},
+        auto_id=True,
+        drop_old=False,
+    )
+    if reuse:
+        _vector_store = store
+    return store
+
+
+def rebuild_vector_store() -> Milvus:
+    """Force-rebuild the vector store with the current config and return it."""
+    return get_vector_store(reuse=False)
+
+
+# Last applied similarity threshold (so embed changes aren't lost on rebuild).
+_sim_threshold: float = 0.0
+
+
+def _apply_threshold(docs: List[Document], threshold: float) -> List[Document]:
+    if not threshold or threshold <= 0:
+        return docs
+    kept = []
+    for d in docs:
+        try:
+            score = float(d.metadata.get("score") or d.metadata.get("relevance_score") or 0.0)
+        except Exception:
+            score = 0.0
+        if score >= threshold:
+            kept.append(d)
+    return kept
 
 
 def add_documents(documents: List[Document]) -> List[str]:
     return get_vector_store().add_documents(documents)
 
 
-def similarity_search(query: str, k: int = 5) -> List[Document]:
-    return get_vector_store().similarity_search(query, k=k)
+def similarity_search(query: str, k: int = 5, threshold: float = 0.0) -> List[Document]:
+    docs = get_vector_store().similarity_search_with_score(query, k=max(1, k))
+    # Milvus similarity_search_with_score returns (Document, score) pairs.
+    if docs and isinstance(docs[0], tuple):
+        filtered = []
+        for doc, score in docs:
+            if threshold and threshold > 0 and float(score) < threshold:
+                continue
+            matched = Document(
+                page_content=doc.page_content,
+                metadata={**doc.metadata, "score": float(score)},
+            )
+            filtered.append(matched)
+        return filtered
+    # Fallback: plain list (no scores) — return as-is.
+    return docs
 
 
 def _new_client():
