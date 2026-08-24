@@ -129,6 +129,27 @@ def _generate_employee_id(prefix: str = "EMP") -> str:
     return f"{prefix}-{suffix}"
 
 
+def generate_strong_password(length: int = 12) -> str:
+    """Generate a random password satisfying the app password policy:
+    lower + upper + digit + special, min length 8."""
+    import random
+    lower = "abcdefghijklmnopqrstuvwxyz"
+    upper = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    digits = "0123456789"
+    special = "!@#$%^&*()_+-=[]{};,.:?/"
+    pool = lower + upper + digits + special
+    length = max(8, int(length))
+    pw = [
+        random.choice(lower),
+        random.choice(upper),
+        random.choice(digits),
+        random.choice(special),
+    ]
+    pw += [random.choice(pool) for _ in range(length - 4)]
+    random.shuffle(pw)
+    return "".join(pw)
+
+
 def _validate_employee_id(eid: str) -> bool:
     import re
     return bool(re.match(r'^(EMP|ADM)-\d{6}$', eid))

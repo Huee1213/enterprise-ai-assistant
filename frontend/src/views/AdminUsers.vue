@@ -87,29 +87,38 @@ function jumpToPage() {
 
 function onFilterChange() { page.value = 1 }
 
-function closeCreateForm() {
-  showCreate.value = false
+function closeAddDialog() {
+  showAddDialog.value = false
   newUsername.value = ''; newPassword.value = ''; newDisplayName.value = ''; newEmployeeId.value = ''
   newAdminPerms.value = new Set(); createError.value = ''
+  clearImportRows()
 }
 
-function toggleCreateForm() {
-  if (showCreate.value) { closeCreateForm(); return }
-  showCreate.value = true
-  if (!newEmployeeId.value) generateEmployeeId()
-  if (!newPassword.value) newPassword.value = generatePassword()
-  if (activeRoleTab.value === 'admin') loadPermBlocks()
+function openAddDialog(mode: 'single' | 'import') {
+  addMode.value = mode
+  showAddDialog.value = true
+  if (mode === 'single' && !newEmployeeId.value) generateEmployeeId()
+  if (mode === 'single' && !newPassword.value) newPassword.value = generatePassword()
+  if (!importPassword.value) importPassword.value = generatePassword()
+  if (mode === 'single' && activeRoleTab.value === 'admin') loadPermBlocks()
+}
+
+function switchAddMode(mode: 'single' | 'import') {
+  addMode.value = mode
+  importResults.value = null
+  createError.value = ''
 }
 
 function resetFormState() {
-  showCreate.value = false; showImport.value = false
+  showAddDialog.value = false
   newUsername.value = ''; newPassword.value = ''; newDisplayName.value = ''; newEmployeeId.value = ''; createError.value = ''
-  importText.value = ''; importResults.value = null; newAdminPerms.value = new Set()
+  clearImportRows(); newAdminPerms.value = new Set()
   selectMode.value = false; selectedIds.value = new Set()
   filterStatus.value = 'all'; searchQuery.value = ''; page.value = 1
 }
 
-const showCreate = ref(false)
+const showAddDialog = ref(false)
+const addMode = ref<'single' | 'import'>('single')
 const newUsername = ref(''), newPassword = ref(''), newDisplayName = ref('')
 const newEmployeeId = ref('')
 const createError = ref(''), creating = ref(false)
@@ -167,14 +176,13 @@ const displayNameError = computed(() => {
 const employeeIdError = computed(() => {
   const v = newEmployeeId.value.trim()
   if (!v) return '工号不能为空'
-  if (!/^[A-Za-z0-9][A-Za-z0-9\-]{2,29}$/.test(v)) return '工号 3-30 位，仅含字母、数字、连字符'
-  if (/^[-]|[-]$/.test(v)) return '工号不能以连字符开头或结尾'
+  if (!/^(EMP|ADM)-\d{6}$/.test(v)) return '工号格式：EMP/ADM-六位数字（如 EMP-000123）'
   return ''
 })
 const createFormValid = computed(() => {
   return newUsername.value.trim().length >= 3 && /^[a-zA-Z0-9_-]+$/.test(newUsername.value.trim())
     && newPassword.value.length >= 8 && /[a-z]/.test(newPassword.value) && /[A-Z]/.test(newPassword.value) && /[0-9]/.test(newPassword.value) && /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?]/.test(newPassword.value)
-    && newEmployeeId.value.trim().length >= 3 && /^[A-Za-z0-9][A-Za-z0-9\-]{2,29}$/.test(newEmployeeId.value.trim())
+    && /^(EMP|ADM)-\d{6}$/.test(newEmployeeId.value.trim())
 })
 
 const pwHasLower = computed(() => /[a-z]/.test(newPassword.value))
@@ -199,7 +207,6 @@ const confirmDeleteId = ref<string | null>(null)
 const confirmDeleteIds = ref<string[] | null>(null)
 
 // Batch import
-const showImport = ref(false)
 const importText = ref('')
 const importPassword = ref(generatePassword())
 const importResults = ref<any[] | null>(null)
@@ -314,25 +321,124 @@ async function saveAdminPerms() {
 
 const importFileInput = ref<HTMLInputElement | null>(null)
 
+// ── Structured batch import (工号/用户名/显示名称/密码) ──
+interface ImportRow {
+  employee_id: string
+  username: string
+  display_name: string
+  password: string
+}
+const importRows = ref<ImportRow[]>([])
+const importDupIds = ref<Set<string>>(new Set())
+const importError = ref('')
+
+// Column-name normalization (Chinese / English accepted).
+const IMPORT_HEADER_MAP: Record<string, string> = {
+  '工号': 'employee_id', 'employee_id': 'employee_id', 'employeeid': 'employee_id', 'id': 'employee_id',
+  '用户名': 'username', 'username': 'username', '账号': 'username', 'login': 'username', 'user': 'username',
+  '显示名称': 'display_name', 'display_name': 'display_name', 'displayname': 'display_name', '姓名': 'display_name', 'name': 'display_name',
+  '密码': 'password', 'password': 'password', '初始密码': 'password', 'pwd': 'password',
+}
+function normalizeHeader(h: string): string {
+  return IMPORT_HEADER_MAP[h.trim().toLowerCase()] || ''
+}
+
+function parseCsvLine(line: string): string[] {
+  const fields: string[] = []
+  let cur = ''
+  let inQuotes = false
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]
+    if (ch === '"') {
+      if (inQuotes && line[i + 1] === '"') { cur += '"'; i++ }
+      else inQuotes = !inQuotes
+    } else if (ch === ',' && !inQuotes) {
+      fields.push(cur.trim()); cur = ''
+    } else cur += ch
+  }
+  fields.push(cur.trim())
+  return fields
+}
+
+function parseImportContent(text: string): ImportRow[] {
+  const lines = text.replace(/\r\n/g, '\n').split('\n').map(l => l.trim()).filter(Boolean)
+  if (!lines.length) return []
+  const firstFields = parseCsvLine(lines[0])
+  const cols = firstFields.map(normalizeHeader)
+  // Header present when the first row maps at least one known column (and isn't a single raw ID).
+  const hasHeader = cols.some(k => k === 'employee_id') && firstFields.length > 1
+  const dataLines = hasHeader ? lines.slice(1) : lines
+  const rows: ImportRow[] = []
+  for (const line of dataLines) {
+    if (hasHeader) {
+      const f = parseCsvLine(line)
+      const get = (key: string) => { const i = cols.indexOf(key); return i >= 0 ? (f[i] || '') : '' }
+      rows.push({
+        employee_id: get('employee_id'),
+        username: get('username'),
+        display_name: get('display_name'),
+        password: get('password'),
+      })
+    } else {
+      // Plain one-ID-per-line quick entry.
+      rows.push({ employee_id: line, username: '', display_name: '', password: '' })
+    }
+  }
+  return rows.filter(r => r.employee_id)
+}
+
+// Per-row status: invalid / duplicate-in-file / registered / ok / unknown(loading)
+function importRowStatus(r: ImportRow): 'invalid' | 'dup' | 'registered' | 'ok' | 'unknown' {
+  if (!/^(EMP|ADM)-\d{6}$/.test(r.employee_id)) return 'invalid'
+  if (importDupIds.value.has(r.employee_id)) return 'dup'
+  const chk = employeeIdChecks.value[r.employee_id]
+  if (chk?.registered) return 'registered'
+  if (chk !== undefined) return 'ok'
+  return 'unknown'
+}
+
+// Re-parse the textarea content into structured rows and refresh checks.
+function parseImportText() {
+  importRows.value = parseImportContent(importText.value)
+  const ids = importRows.value.map(r => r.employee_id)
+  const seen = new Set<string>()
+  const dups = new Set<string>()
+  for (const id of ids) { if (seen.has(id)) dups.add(id); seen.add(id) }
+  importDupIds.value = dups
+  if (ids.length) checkEmployeeIds(ids)
+}
+
 async function onFileImport(e: Event) {
   const input = e.target as HTMLInputElement
   if (!input.files?.length) return
   const file = input.files[0]
   const text = await file.text()
-  const lines = text.replace(/\r\n/g, '\n').split('\n').map(l => l.trim()).filter(Boolean)
-  // Remove CSV header if present
-  const first = lines[0]?.toLowerCase()
-  if (first && (first.includes('工号') || first.includes('id') || first.includes('employee'))) lines.shift()
-  // Append to existing text
-  const existing = importText.value.split('\n').map(l => l.trim()).filter(Boolean)
-  const merged = [...new Set([...existing, ...lines])]
-  importText.value = merged.join('\n')
+  // Detect a header; if the file has a CSV header use it as-is, else keep plain content.
+  const firstLine = text.replace(/\r\n/g, '\n').split('\n').find(l => l.trim()) || ''
+  const firstFields = parseCsvLine(firstLine)
+  const hasHeader = firstFields.map(normalizeHeader).some(k => k === 'employee_id') && firstFields.length > 1
+  importText.value = hasHeader ? text.trim() : text.trim()
   input.value = ''
-  checkEmployeeIds(lines)
+  parseImportText()
 }
 
-// Employee ID check
-const employeeIdChecks = ref<Record<string, { registered: boolean }>>({})
+function clearImportRows() {
+  importText.value = ''
+  importRows.value = []
+  importDupIds.value = new Set()
+  employeeIdChecks.value = {}
+  importResults.value = null
+  importError.value = ''
+}
+
+function downloadImportTemplate() {
+  const csv = '工号,用户名,显示名称,密码\nEMP-000001,zhangsan,张三,Abc12345!x\nEMP-000002,,,\nEMP-000003,,李四,'
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url; a.download = '批量导入用户模板.csv'; a.click()
+  URL.revokeObjectURL(url)
+}
 
 async function fetchUsers() {
   if (_fetching) return
@@ -374,6 +480,10 @@ function onRefreshIntervalChange() {
   startAutoRefresh()
 }
 
+function onAddDialogKeydown(e: KeyboardEvent) {
+  if (e.key === 'Escape' && showAddDialog.value) closeAddDialog()
+}
+
 function applyInterval() {
   const v = Math.max(5, Math.min(300, Math.floor(newInterval.value)))
   newInterval.value = v
@@ -383,13 +493,17 @@ function applyInterval() {
 }
 
 onMounted(() => {
+  document.addEventListener('keydown', onAddDialogKeydown)
   if (auth.hasPermission('users.view') || auth.hasPermission('users.create') || auth.hasPermission('users.edit') || auth.hasPermission('users.delete') || auth.hasPermission('users.import') || auth.hasPermission('users.view_data')) {
     loading.value = true; startAutoRefresh()
   } else {
     loading.value = false
   }
 })
-onUnmounted(stopAutoRefresh)
+onUnmounted(() => { stopAutoRefresh(); document.removeEventListener('keydown', onAddDialogKeydown) })
+
+// Employee ID registry check (from /auth/check-employee-ids)
+const employeeIdChecks = ref<Record<string, { registered: boolean }>>({})
 
 async function checkEmployeeIds(ids: string[]) {
   if (!ids.length) return
@@ -400,8 +514,7 @@ async function checkEmployeeIds(ids: string[]) {
 }
 
 function onImportInput() {
-  const lines = importText.value.split('\n').map(l => l.trim()).filter(Boolean)
-  if (lines.length > 0) checkEmployeeIds(lines)
+  parseImportText()
 }
 
 function toggleSelectMode() {
@@ -448,13 +561,18 @@ async function executeBatchDelete() {
 function cancelDelete() { confirmDeleteId.value = null; confirmDeleteIds.value = null }
 
 async function executeImport() {
-  const ids = importText.value.split('\n').map(l => l.trim()).filter(Boolean)
-  if (!ids.length) return
-  importing.value = true; importResults.value = null
+  const users = importRows.value.map(r => ({
+    employee_id: r.employee_id.trim(),
+    username: r.username.trim(),
+    display_name: r.display_name.trim(),
+    password: r.password,
+  })).filter(r => r.employee_id)
+  if (!users.length) return
+  importing.value = true; importResults.value = null; importError.value = ''
   try {
-    const { data } = await apiClient.post('/auth/batch-import', { employee_ids: ids, default_password: importPassword.value })
+    const { data } = await apiClient.post('/auth/batch-import', { users, default_password: importPassword.value })
     importResults.value = data.results; await fetchUsers()
-  } catch (err: any) { error.value = err.message || '导入失败' }
+  } catch (err: any) { importError.value = err.response?.data?.detail || err.message || '导入失败' }
   importing.value = false
 }
 
@@ -480,7 +598,7 @@ async function handleCreate() {
         employee_id: newEmployeeId.value.trim(),
       })
     }
-    showCreate.value = false; newUsername.value = ''; newPassword.value = ''; newDisplayName.value = ''; newEmployeeId.value = ''; newAdminPerms.value = new Set()
+    showAddDialog.value = false; newUsername.value = ''; newPassword.value = ''; newDisplayName.value = ''; newEmployeeId.value = ''; newAdminPerms.value = new Set()
     await fetchUsers()
   } catch (err: any) { createError.value = err.message || '创建失败' }
   finally { creating.value = false }
@@ -696,10 +814,10 @@ async function executeClearUserData() {
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 12l2 2 4-4"/></svg>
           多选
         </button>
-        <button v-if="auth.hasPermission('users.import') && activeRoleTab === 'employee'" @click="showImport = !showImport" class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted transition-colors">
+        <button v-if="auth.hasPermission('users.import') && activeRoleTab === 'employee'" @click="openAddDialog('import')" class="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm font-medium hover:bg-muted transition-colors">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" x2="12" y1="3" y2="15"/></svg>导入工号
         </button>
-        <button v-if="auth.hasPermission('users.create')" @click="toggleCreateForm" class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90 transition-colors whitespace-nowrap">
+        <button v-if="auth.hasPermission('users.create')" @click="openAddDialog('single')" class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-3 py-2 text-sm font-medium hover:bg-primary/90 transition-colors whitespace-nowrap">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M12 5v14"/></svg>
           添加{{ activeRoleTab === 'employee' ? '员工' : '管理员' }}
         </button>
@@ -740,162 +858,6 @@ async function executeClearUserData() {
       </button>
     </div>
 
-    <!-- Batch import -->
-    <div v-if="showImport && activeRoleTab === 'employee'" class="rounded-xl border border-border bg-card p-5">
-      <h3 class="text-sm font-semibold mb-3">批量导入工号</h3>
-      <p class="text-xs text-muted-foreground mb-3">每行一个工号，或上传 .txt / .csv 文件</p>
-      <div class="flex items-center gap-2 mb-3">
-        <label class="text-xs text-muted-foreground shrink-0">临时密码:</label>
-        <input v-model="importPassword" type="text" maxlength="128" placeholder="设置导入用户的初始密码"
-          class="flex-1 h-8 rounded-lg border border-input bg-background px-2.5 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
-        <button @click="fillGeneratedPassword('import')" type="button" title="生成随机密码"
-          class="inline-flex items-center gap-1 h-8 rounded-lg border border-input bg-background px-2 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
-          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-          生成
-        </button>
-      </div>
-      <div class="flex gap-2 mb-3">
-        <input ref="importFileInput" type="file" accept=".txt,.csv" @change="onFileImport" class="block w-full text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90" />
-      </div>
-      <textarea v-model="importText" @input="onImportInput" placeholder="EMP001\nEMP002\nEMP003" class="w-full h-24 rounded-lg border border-input bg-background p-3 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none" />
-      <div v-if="importText.trim()" class="mt-2 flex flex-wrap gap-2 text-xs">
-        <span v-for="line in importText.split('\n').map(l=>l.trim()).filter(Boolean)" :key="line" class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full"
-          :class="employeeIdChecks[line]?.registered ? 'bg-destructive/10 text-destructive' : 'bg-green-500/10 text-green-600 dark:text-green-400'">
-          <span class="w-1.5 h-1.5 rounded-full" :class="employeeIdChecks[line]?.registered ? 'bg-destructive' : 'bg-green-500'" /> {{ line }}
-          <template v-if="employeeIdChecks[line]?.registered">（已注册）</template>
-          <template v-else-if="employeeIdChecks[line] !== undefined">（可导入）</template>
-          <template v-else><span class="w-2 h-2 rounded-full bg-muted-foreground/30 animate-pulse" /></template>
-        </span>
-      </div>
-      <div class="flex gap-2 mt-3">
-        <button @click="executeImport" :disabled="importing || !importText.trim()" class="rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50">{{ importing ? '导入中...' : '导入' }}</button>
-        <button @click="showImport = false; importResults = null; importText = ''" class="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-muted">取消</button>
-      </div>
-      <div v-if="importResults" class="mt-3 space-y-1 max-h-32 overflow-y-auto">
-        <div v-for="r in importResults" :key="r.employee_id" class="text-xs flex items-center gap-2" :class="r.status === 'created' ? 'text-green-600 dark:text-green-400' : r.status === 'skipped' ? 'text-muted-foreground' : 'text-destructive'">{{ r.employee_id }} — {{ r.status === 'created' ? '已创建' : r.reason || r.status }}</div>
-      </div>
-    </div>
-
-    <!-- Create user -->
-      <div v-if="showCreate" class="rounded-xl border border-border bg-card p-5">
-        <h3 class="text-sm font-semibold mb-4">新建{{ activeRoleTab === 'employee' ? '员工' : '管理员' }}账号</h3>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 mb-1">
-          <div class="space-y-1">
-            <input v-model="newUsername" @input="createError = ''" placeholder="用户名 *" maxlength="50"
-              class="h-9 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-              :class="newUsername && usernameError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newUsername && !usernameError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
-            <p v-if="newUsername && usernameError" class="text-[10px] text-destructive flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {{ usernameError }}
-            </p>
-            <p v-else-if="newUsername && !usernameError" class="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              用户名格式正确
-            </p>
-          </div>
-          <div class="space-y-1">
-            <div class="flex gap-1">
-              <input v-model="newEmployeeId" @input="createError = ''" placeholder="工号 *" maxlength="30"
-                class="flex-1 h-9 rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors font-mono"
-                :class="newEmployeeId && employeeIdError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newEmployeeId && !employeeIdError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
-              <button @click="generateEmployeeId" type="button" title="生成工号"
-                class="inline-flex items-center gap-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                生成
-              </button>
-            </div>
-            <p v-if="newEmployeeId && employeeIdError" class="text-[10px] text-destructive flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {{ employeeIdError }}
-            </p>
-            <p v-else-if="newEmployeeId && !employeeIdError" class="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              工号格式正确
-            </p>
-          </div>
-          <div class="space-y-1">
-            <div class="flex gap-1">
-              <input v-model="newPassword" @input="createError = ''" type="text" placeholder="密码 *" maxlength="128"
-                class="flex-1 h-9 rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-                :class="newPassword && passwordError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newPassword && !passwordError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
-              <button @click="fillGeneratedPassword('create')" type="button" title="生成随机密码"
-                class="inline-flex items-center gap-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
-                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
-                生成
-              </button>
-            </div>
-            <p v-if="newPassword && passwordError" class="text-[10px] text-destructive flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {{ passwordError }}
-            </p>
-            <p v-else-if="newPassword && !passwordError" class="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-              密码强度达标
-            </p>
-          </div>
-          <div class="space-y-1">
-            <input v-model="newDisplayName" placeholder="显示名称（选填）" maxlength="100"
-              class="h-9 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
-              :class="newDisplayName && displayNameError ? 'border-destructive/60 focus-visible:ring-destructive/30' : 'border-input'" />
-            <p v-if="newDisplayName && displayNameError" class="text-[10px] text-destructive flex items-center gap-1">
-              <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
-              {{ displayNameError }}
-            </p>
-          </div>
-        </div>
-        <div v-if="newPassword && passwordError" class="flex flex-wrap gap-1.5 mt-2 mb-2">
-          <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5"
-            :class="pwHasLower ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">
-            <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="pwHasLower" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>
-            小写
-          </span>
-          <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5"
-            :class="pwHasUpper ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">
-            <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="pwHasUpper" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>
-            大写
-          </span>
-          <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5"
-            :class="pwHasDigit ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">
-            <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="pwHasDigit" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>
-            数字
-          </span>
-          <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5"
-            :class="pwHasSpecial ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">
-            <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="pwHasSpecial" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>
-            特殊字符
-          </span>
-          <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5"
-            :class="pwLongEnough ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">
-            <svg xmlns="http://www.w3.org/2000/svg" width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3"><polyline v-if="pwLongEnough" points="20 6 9 17 4 12"/><circle v-else cx="12" cy="12" r="10"/></svg>
-            ≥8位
-          </span>
-        </div>
-        <!-- Admin permission selection -->
-        <div v-if="activeRoleTab === 'admin' && auth.isSuperAdmin" class="mt-4 border-t border-border pt-3 mb-4">
-          <p class="text-xs font-medium text-muted-foreground mb-3">授予以下权限（可多选）：</p>
-          <div v-if="permBlocks.groups.length === 0" class="text-[10px] text-muted-foreground/60">加载中...</div>
-          <div v-else v-for="g in permBlocks.groups" :key="g.group" class="mb-3">
-            <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5">{{ g.label }}</p>
-            <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
-              <div v-for="b in g.perms" :key="b.key"
-                @click="permBlockToggled(b.key)"
-                class="flex items-center gap-2.5 rounded-lg border px-3 py-2 cursor-pointer select-none transition-all"
-                :class="newAdminPerms.has(b.key) ? 'border-primary/40 bg-primary/5 shadow-sm' : 'border-border hover:border-muted-foreground/30 hover:bg-muted/20'">
-                <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors"
-                  :class="newAdminPerms.has(b.key) ? 'bg-primary border-primary' : 'border-muted-foreground/30'">
-                  <svg v-if="newAdminPerms.has(b.key)" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
-                </div>
-                <span class="text-xs font-medium" :class="newAdminPerms.has(b.key) ? 'text-foreground' : 'text-muted-foreground'">{{ b.label }}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      <p v-if="createError" class="text-xs text-destructive mb-2">{{ createError }}</p>
-      <div class="flex gap-2">
-        <button @click="handleCreate" :disabled="creating || !createFormValid" class="rounded-lg bg-primary text-primary-foreground px-4 py-1.5 text-sm font-medium hover:bg-primary/90 disabled:opacity-50">{{ creating ? '创建中...' : '创建' }}</button>
-        <button @click="closeCreateForm" class="rounded-lg border border-border px-4 py-1.5 text-sm hover:bg-muted">取消</button>
-      </div>
-    </div>
 
     <p v-if="error" class="text-sm text-destructive">{{ error }}</p>
 
@@ -1053,6 +1015,200 @@ async function executeClearUserData() {
     <ConfirmDialog v-if="confirmBulkDeleteMsgs" :title="`删除 ${confirmBulkDeleteMsgs.length} 条消息`" message="确定删除选中的消息？删除后不可恢复。" destructive @confirm="executeBulkDeleteMsgs" @cancel="cancelBulkDeleteMsgs" />
     <ConfirmDialog v-if="confirmBulkDeleteConvs" :title="`删除 ${confirmBulkDeleteConvs.length} 个对话`" message="确定删除选中的对话及其所有消息？删除后不可恢复。" destructive @confirm="executeBulkDeleteConvs" @cancel="cancelBulkDeleteConvs" />
     <ConfirmDialog v-if="confirmClearUserData" title="清空数据" message="确定清空该用户的所有对话记录、记忆事实和摘要？不可恢复。" destructive @confirm="executeClearUserData" @cancel="() => confirmClearUserData = false" />
+
+    <!-- Add user dialog (single create / batch import) -->
+    <Teleport to="body">
+      <div v-if="showAddDialog" key="add" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in" @click="closeAddDialog">
+        <div class="bg-card border border-border rounded-xl w-full max-w-2xl shadow-2xl animate-scale-in overflow-hidden flex flex-col max-h-[92vh]" @click.stop>
+          <div class="px-5 py-4 border-b border-border flex items-center justify-between shrink-0">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-primary"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><line x1="19" x2="19" y1="8" y2="14"/><line x1="22" x2="16" y1="11" y2="11"/></svg>
+              </div>
+              <h2 class="text-sm font-semibold">添加{{ activeRoleTab === 'employee' ? '员工' : '管理员' }}</h2>
+            </div>
+            <button @click="closeAddDialog" class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
+          </div>
+
+          <!-- Mode tabs -->
+          <div class="flex gap-0 px-5 pt-3 border-b border-border shrink-0">
+            <button
+              @click="switchAddMode('single')"
+              class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+              :class="addMode === 'single' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+            >单个添加</button>
+            <button
+              v-if="activeRoleTab === 'employee' && auth.hasPermission('users.import')"
+              @click="switchAddMode('import')"
+              class="px-4 py-2 text-sm font-medium border-b-2 transition-colors"
+              :class="addMode === 'import' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+            >批量导入工号</button>
+          </div>
+
+          <div class="p-5 overflow-y-auto min-h-0 space-y-4">
+            <!-- ── Single create mode ── -->
+            <div v-if="addMode === 'single'">
+              <p class="text-xs text-muted-foreground mb-3">逐个创建{{ activeRoleTab === 'employee' ? '员工' : '管理员' }}账号，工号与密码可自动生成。</p>
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="space-y-1">
+                  <label class="text-xs font-medium text-muted-foreground">用户名 *</label>
+                  <input v-model="newUsername" @input="createError = ''" placeholder="用户名长度 3-50" maxlength="50"
+                    class="h-9 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    :class="newUsername && usernameError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newUsername && !usernameError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
+                  <p v-if="newUsername && usernameError" class="text-[10px] text-destructive flex items-center gap-1">{{ usernameError }}</p>
+                  <p v-else-if="newUsername && !usernameError" class="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-1">用户名格式正确</p>
+                </div>
+                <div class="space-y-1">
+                  <label class="text-xs font-medium text-muted-foreground">工号 *</label>
+                  <div class="flex gap-1">
+                    <input v-model="newEmployeeId" @input="createError = ''" placeholder="工号 3-30 位" maxlength="30"
+                      class="flex-1 h-9 rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors font-mono"
+                      :class="newEmployeeId && employeeIdError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newEmployeeId && !employeeIdError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
+                    <button @click="generateEmployeeId" type="button" title="生成工号"
+                      class="inline-flex items-center gap-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                    </button>
+                  </div>
+                  <p v-if="newEmployeeId && employeeIdError" class="text-[10px] text-destructive flex items-center gap-1">{{ employeeIdError }}</p>
+                  <p v-else-if="newEmployeeId && !employeeIdError" class="text-[10px] text-green-600 dark:text-green-400 flex items-center gap-1">工号格式正确</p>
+                </div>
+                <div class="space-y-1">
+                  <label class="text-xs font-medium text-muted-foreground">密码 *</label>
+                  <div class="flex gap-1">
+                    <input v-model="newPassword" @input="createError = ''" type="text" placeholder="8-128 位含大小写/数字/特殊字符" maxlength="128"
+                      class="flex-1 h-9 rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors font-mono"
+                      :class="newPassword && passwordError ? 'border-destructive/60 focus-visible:ring-destructive/30' : newPassword && !passwordError ? 'border-green-500/60 focus-visible:ring-green-500/30' : 'border-input'" />
+                    <button @click="fillGeneratedPassword('create')" type="button" title="生成随机密码"
+                      class="inline-flex items-center gap-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                    </button>
+                  </div>
+                  <p v-if="newPassword && passwordError" class="text-[10px] text-destructive flex items-center gap-1">{{ passwordError }}</p>
+                </div>
+                <div class="space-y-1">
+                  <label class="text-xs font-medium text-muted-foreground">显示名称（选填）</label>
+                  <input v-model="newDisplayName" placeholder="设置用户显示名称" maxlength="100"
+                    class="h-9 w-full rounded-lg border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring transition-colors"
+                    :class="newDisplayName && displayNameError ? 'border-destructive/60 focus-visible:ring-destructive/30' : 'border-input'" />
+                  <p v-if="newDisplayName && displayNameError" class="text-[10px] text-destructive flex items-center gap-1">{{ displayNameError }}</p>
+                </div>
+              </div>
+              <div v-if="newPassword" class="flex flex-wrap gap-1.5 mt-3">
+                <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="pwHasLower ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">小写</span>
+                <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="pwHasUpper ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">大写</span>
+                <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="pwHasDigit ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">数字</span>
+                <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="pwHasSpecial ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">特殊字符</span>
+                <span class="inline-flex items-center gap-0.5 text-[10px] rounded px-1.5 py-0.5" :class="pwLongEnough ? 'bg-green-500/10 text-green-600 dark:text-green-400' : 'bg-muted text-muted-foreground'">≥8位</span>
+              </div>
+              <!-- Admin permission selection -->
+              <div v-if="activeRoleTab === 'admin' && auth.isSuperAdmin" class="mt-4 border-t border-border pt-3">
+                <p class="text-xs font-medium text-muted-foreground mb-3">授予以下权限（可多选）：</p>
+                <div v-if="permBlocks.groups.length === 0" class="text-[10px] text-muted-foreground/60">加载中...</div>
+                <div v-else v-for="g in permBlocks.groups" :key="g.group" class="mb-3">
+                  <p class="text-[10px] font-medium text-muted-foreground/60 uppercase tracking-wider mb-1.5">{{ g.label }}</p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-1.5">
+                    <div v-for="b in g.perms" :key="b.key"
+                      @click="permBlockToggled(b.key)"
+                      class="flex items-center gap-2.5 rounded-lg border px-3 py-2 cursor-pointer select-none transition-all"
+                      :class="newAdminPerms.has(b.key) ? 'border-primary/40 bg-primary/5 shadow-sm' : 'border-border hover:border-muted-foreground/30 hover:bg-muted/20'">
+                      <div class="w-4 h-4 rounded border-2 flex items-center justify-center shrink-0 transition-colors"
+                        :class="newAdminPerms.has(b.key) ? 'bg-primary border-primary' : 'border-muted-foreground/30'">
+                        <svg v-if="newAdminPerms.has(b.key)" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3"><polyline points="20 6 9 17 4 12"/></svg>
+                      </div>
+                      <span class="text-xs font-medium" :class="newAdminPerms.has(b.key) ? 'text-foreground' : 'text-muted-foreground'">{{ b.label }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p v-if="createError" class="text-xs text-destructive mt-3 mb-2">{{ createError }}</p>
+              <div class="flex gap-2 mt-4 justify-end">
+                <button @click="closeAddDialog" class="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted transition-colors">取消</button>
+                <button @click="handleCreate" :disabled="creating || !createFormValid" class="rounded-lg bg-primary text-primary-foreground px-5 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">{{ creating ? '创建中...' : '创建账号' }}</button>
+              </div>
+            </div>
+
+            <!-- ── Batch import mode ── -->
+            <div v-else>
+              <!-- Format requirement -->
+              <div class="rounded-lg border border-primary/20 bg-primary/5 p-3 mb-3">
+                <p class="text-xs font-medium text-muted-foreground mb-1 flex items-center gap-1"><svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>导入文件格式要求（CSV / TXT，UTF-8 编码）</p>
+                <p class="text-[11px] text-muted-foreground/80 leading-relaxed">每行一个员工，逗号分隔，首行表头：<code class="font-mono text-[10px] bg-muted px-1 rounded">工号,用户名,显示名称,密码</code><br />
+                  也支持英文表头 <code class="font-mono text-[10px] bg-muted px-1 rounded">employee_id,username,display_name,password</code>。</p>
+                <ul class="text-[11px] text-muted-foreground/80 mt-1.5 space-y-0.5 list-disc list-inside">
+                  <li>工号必填，格式 <code class="font-mono text-[10px]">EMP/ADM-六位数字</code>（如 EMP-000123）</li>
+                  <li>用户名、显示名称可留空，留空时默认使用工号</li>
+                  <li>密码可留空，留空时使用下方初始密码；未填初始密码则自动生成</li>
+                </ul>
+                <button @click="downloadImportTemplate" class="mt-2 inline-flex items-center gap-1 rounded-md bg-muted/60 hover:bg-muted px-2.5 py-1 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" x2="12" y1="15" y2="3"/></svg>
+                  下载模板
+                </button>
+              </div>
+              <div class="flex items-center gap-2 mb-3">
+                <label class="text-xs text-muted-foreground shrink-0">初始密码:</label>
+                <input v-model="importPassword" type="text" maxlength="128" placeholder="留空则自动生成（未在文件中填写密码的行）"
+                  class="flex-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs font-mono focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring" />
+                <button @click="fillGeneratedPassword('import')" type="button" title="生成随机密码"
+                  class="inline-flex items-center gap-1 h-9 rounded-lg border border-input bg-background px-2.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M2.5 22v-6h6M2 11.5a10 10 0 0 1 18.8-4.3M22 12.5a10 10 0 0 1-18.8 4.2"/></svg>
+                  生成
+                </button>
+              </div>
+              <div class="flex gap-2 mb-3">
+                <input ref="importFileInput" type="file" accept=".txt,.csv" @change="onFileImport" class="block w-full text-xs text-muted-foreground file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/90" />
+              </div>
+              <textarea v-model="importText" @input="onImportInput" placeholder="工号,用户名,显示名称,密码&#10;EMP-000001,zhangsan,张三,Abc12345!x&#10;EMP-000002,,&#10;EMP-000003,,李四" class="w-full h-28 rounded-lg border border-input bg-background p-3 text-sm font-mono focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring resize-none" />
+
+              <!-- Preview table -->
+              <div v-if="importRows.length" class="mt-2">
+                <div class="flex items-center justify-between mb-1.5">
+                  <p class="text-xs font-medium text-muted-foreground">待导入 {{ importRows.length }} 行</p>
+                  <p class="text-[10px] text-muted-foreground/60">{{ importRows.filter(r => importRowStatus(r) === 'ok').length }} 可导入 · {{ importRows.filter(r => importRowStatus(r) === 'registered').length }} 已注册 · {{ importRows.filter(r => importRowStatus(r) === 'invalid' || importRowStatus(r) === 'dup').length }} 需处理</p>
+                </div>
+                <div class="max-h-48 overflow-y-auto rounded-lg border border-border">
+                  <table class="w-full text-xs">
+                    <thead class="bg-muted/30 sticky top-0">
+                      <tr class="border-b border-border text-left text-muted-foreground">
+                        <th class="px-2 py-1.5 font-medium">工号</th>
+                        <th class="px-2 py-1.5 font-medium">用户名</th>
+                        <th class="px-2 py-1.5 font-medium">显示名称</th>
+                        <th class="px-2 py-1.5 font-medium">密码</th>
+                        <th class="px-2 py-1.5 font-medium">状态</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr v-for="(r, i) in importRows" :key="i + '-' + r.employee_id" class="border-b border-border last:border-0">
+                        <td class="px-2 py-1.5 font-mono">{{ r.employee_id || '—' }}</td>
+                        <td class="px-2 py-1.5">{{ r.username || '（默认工号）' }}</td>
+                        <td class="px-2 py-1.5">{{ r.display_name || '（默认工号）' }}</td>
+                        <td class="px-2 py-1.5 font-mono">{{ r.password ? '●●●●●●' : '（自动生成）' }}</td>
+                        <td class="px-2 py-1.5">
+                          <span v-if="importRowStatus(r) === 'invalid'" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive" title="工号格式：EMP/ADM-六位数字">格式错误</span>
+                          <span v-else-if="importRowStatus(r) === 'dup'" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400">文件内重复</span>
+                          <span v-else-if="importRowStatus(r) === 'registered'" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive">已注册</span>
+                          <span v-else-if="importRowStatus(r) === 'ok'" class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400">可导入</span>
+                          <span v-else class="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">检测中...</span>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div v-if="importRows.length === 0 && importText.trim()" class="mt-2 text-[11px] text-destructive">未能解析出有效工号，请检查格式（第一行可加表头「工号,...」）。</div>
+
+              <div v-if="importError" class="mt-3 text-xs text-destructive">{{ importError }}</div>
+              <div v-if="importResults" class="mt-3 space-y-1 max-h-32 overflow-y-auto rounded-lg border border-border bg-muted/20 p-3">
+                <div v-for="r in importResults" :key="r.employee_id" class="text-xs flex items-center gap-2" :class="r.status === 'created' ? 'text-green-600 dark:text-green-400' : r.status === 'skipped' ? 'text-muted-foreground' : 'text-destructive'">{{ r.employee_id }} — {{ r.status === 'created' ? '已创建' : r.reason || r.status }}</div>
+              </div>
+              <div class="flex gap-2 mt-4 justify-end">
+                <button @click="clearImportRows" :disabled="importing" class="rounded-lg border border-border px-4 py-2 text-sm hover:bg-muted transition-colors disabled:opacity-50">清空</button>
+                <button @click="executeImport" :disabled="importing || !importRows.length" class="rounded-lg bg-primary text-primary-foreground px-5 py-2 text-sm font-medium hover:bg-primary/90 disabled:opacity-50 transition-colors">{{ importing ? '导入中...' : '开始导入' }}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- Edit dialog -->
     <Teleport to="body">

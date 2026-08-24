@@ -9,6 +9,7 @@ const auth = useAuthStore()
 const emit = defineEmits<{
   viewDetail: [docId: string]
   deleted: []
+  loaded: [docs: DocumentInfo[]]
 }>()
 
 const documents = ref<DocumentInfo[]>([])
@@ -17,15 +18,19 @@ const error = ref('')
 const confirmDeleteIds = ref<string[] | null>(null)
 const listRef = ref<HTMLDivElement | null>(null)
 const selectedIds = ref<Set<string>>(new Set())
+const searchQuery = ref('')
 let scrollTop = 0
 
-const allSelected = computed(() =>
-  documents.value.length > 0 && selectedIds.value.size === documents.value.length
-)
+const filteredDocuments = computed(() => {
+  const q = searchQuery.value.trim().toLowerCase()
+  if (!q) return documents.value
+  return documents.value.filter(d =>
+    d.filename.toLowerCase().includes(q) ||
+    (d.content_type || '').toLowerCase().includes(q)
+  )
+})
 
-const indeterminate = computed(() =>
-  selectedIds.value.size > 0 && selectedIds.value.size < documents.value.length
-)
+const hasQuery = computed(() => searchQuery.value.trim().length > 0)
 
 function toggleSelect(id: string) {
   const s = new Set(selectedIds.value)
@@ -34,12 +39,22 @@ function toggleSelect(id: string) {
 }
 
 function toggleSelectAll() {
+  const target = hasQuery.value ? filteredDocuments.value.map(d => d.id) : documents.value.map(d => d.id)
   if (allSelected.value) {
     selectedIds.value = new Set()
   } else {
-    selectedIds.value = new Set(documents.value.map(d => d.id))
+    selectedIds.value = new Set(target)
   }
 }
+
+const allSelected = computed(() => {
+  const target = hasQuery.value ? filteredDocuments.value : documents.value
+  return target.length > 0 && selectedIds.value.size === target.length
+})
+
+const indeterminate = computed(() =>
+  selectedIds.value.size > 0 && selectedIds.value.size < (hasQuery.value ? filteredDocuments.value : documents.value).length
+)
 
 async function fetchDocuments() {
   scrollTop = listRef.value?.scrollTop || 0
@@ -47,6 +62,7 @@ async function fetchDocuments() {
   error.value = ''
   try {
     documents.value = await listDocuments()
+    emit('loaded', documents.value)
   } catch (err: any) {
     error.value = err.message || '加载文档失败'
   } finally {
@@ -105,16 +121,35 @@ onMounted(fetchDocuments)
 
 <template>
   <div ref="listRef">
-    <div class="flex items-center justify-between mb-3">
+    <div class="flex items-center justify-between mb-3 gap-2 flex-wrap">
       <h3 class="text-sm font-medium">已上传文档</h3>
-      <button
-        v-if="auth.hasPermission('documents.delete') && selectedIds.size > 0"
-        @click="confirmBatchDelete"
-        class="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
-      >
-        <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
-        删除 ({{ selectedIds.size }})
-      </button>
+      <div class="flex items-center gap-2">
+        <div class="relative">
+          <svg xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground/50 pointer-events-none"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+          <input
+            v-model="searchQuery"
+            type="text"
+            placeholder="搜索文件名..."
+            class="h-8 w-40 sm:w-52 rounded-md border border-border/60 bg-background pl-7 pr-7 text-xs text-foreground placeholder:text-muted-foreground/40 focus:outline-none focus:ring-1 focus:ring-primary/30 focus:border-primary/30 transition-all"
+          />
+          <button
+            v-if="hasQuery"
+            @click="searchQuery = ''"
+            class="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground/40 hover:text-muted-foreground transition-colors"
+            title="清除搜索"
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>
+        <button
+          v-if="auth.hasPermission('documents.delete') && selectedIds.size > 0"
+          @click="confirmBatchDelete"
+          class="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs bg-destructive/10 text-destructive hover:bg-destructive/20 transition-colors"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+          删除 ({{ selectedIds.size }})
+        </button>
+      </div>
     </div>
 
     <div v-if="isLoading" class="flex justify-center py-8">
@@ -124,6 +159,8 @@ onMounted(fetchDocuments)
     <div v-else-if="error" class="text-sm text-destructive py-4">{{ error }}</div>
 
     <div v-else-if="documents.length === 0" class="text-center text-muted-foreground text-sm py-8">暂无上传文档</div>
+
+    <div v-else-if="hasQuery && filteredDocuments.length === 0" class="text-center text-muted-foreground text-sm py-8">未找到匹配的文档</div>
 
     <div v-else class="space-y-2">
       <div class="flex items-center gap-2 pb-1 text-xs text-muted-foreground border-b border-border">
@@ -140,7 +177,7 @@ onMounted(fetchDocuments)
       </div>
 
       <div
-        v-for="(doc, idx) in documents"
+        v-for="(doc, idx) in filteredDocuments"
         :key="doc.id"
         class="flex items-center justify-between rounded-lg border border-border p-3 hover:bg-muted/30 transition-colors animate-fade-in"
         :class="{ 'border-primary/40 bg-primary/5': selectedIds.has(doc.id) }"

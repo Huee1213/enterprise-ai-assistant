@@ -91,11 +91,21 @@ function closeDetail() {
   detailDoc.value = null
 }
 
+function applyDocs(data: any[]) {
+  stats.value.total_docs = data.length
+  stats.value.total_chunks = data.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
+}
+
+// DocumentList fetches once on mount and reports the docs it loaded, so the
+// header stats are computed from the same data without a second API call.
+function onDocsLoaded(docs: any[]) {
+  applyDocs(docs)
+}
+
 async function refreshStats() {
   try {
     const { data } = await apiClient.get('/documents/list')
-    stats.value.total_docs = data.length
-    stats.value.total_chunks = data.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
+    applyDocs(data)
     documentListRef.value?.setDocuments(data)  // update list without extra API call
   } catch {}
 }
@@ -114,8 +124,8 @@ async function downloadFile() {
   } catch {}
 }
 
-// DocumentList already fetches stats via fetchDocuments; only refresh after mutations
-// onMounted(refreshStats) ← removed to avoid duplicate /api/documents/list calls
+// Stats refresh: on mount via DocumentList's `loaded` event; after uploads/deletes
+// via refreshStats (re-fetch + push to DocumentList without a second mount fetch).
 </script>
 
 <template>
@@ -135,7 +145,7 @@ async function downloadFile() {
       </div>
 
       <div v-if="auth.hasPermission('documents.view')" class="rounded-xl border border-border bg-card p-4 md:p-6">
-        <DocumentList ref="documentListRef" @view-detail="viewDetail" @deleted="refreshStats" />
+        <DocumentList ref="documentListRef" @view-detail="viewDetail" @deleted="refreshStats" @loaded="onDocsLoaded" />
       </div>
 
       <div v-if="!auth.hasPermission('documents.upload') && !auth.hasPermission('documents.view')" class="rounded-xl border border-border bg-card p-8 text-center">

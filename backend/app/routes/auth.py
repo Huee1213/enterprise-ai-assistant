@@ -37,9 +37,21 @@ class RegisterRequest(BaseModel):
     employee_id: str = ""
 
 
+class BatchImportUserItem(BaseModel):
+    """One row of a batch import. username/display_name/password are optional;
+    missing values fall back to employee_id / generated initial password."""
+    employee_id: str
+    username: str = ""
+    display_name: str = ""
+    password: str = ""
+
+
 class BatchImportRequest(BaseModel):
-    employee_ids: list[str]
-    default_password: str = "123456"
+    # Legacy: a flat list of employee IDs (one per line).
+    employee_ids: list[str] = []
+    # Structured rows (password / employee_id / username / display_name).
+    users: list[BatchImportUserItem] = []
+    default_password: str = ""
 
 
 class CheckEmployeeIdsRequest(BaseModel):
@@ -286,7 +298,7 @@ async def batch_import_file(
         raise HTTPException(status_code=413, detail="导入文件不能超过 10MB")
     content = raw.decode("utf-8", errors="replace")
     lines = [l.strip() for l in content.replace("\r\n", "\n").split("\n") if l.strip()]
-    from app.auth import create_user as _create, check_employee_ids as _check
+    from app.auth import create_user as _create, check_employee_ids as _check, generate_strong_password
     existing = await _check(db, lines)
     results = []
     for eid in lines:
@@ -294,7 +306,7 @@ async def batch_import_file(
             results.append({"employee_id": eid, "status": "skipped", "reason": "工号已存在"})
             continue
         try:
-            user = await _create(db, username=eid, password="123456", employee_id=eid, display_name=eid)
+            user = await _create(db, username=eid, password=generate_strong_password(), employee_id=eid, display_name=eid)
             results.append({"employee_id": eid, "status": "created"})
         except Exception as e:
             results.append({"employee_id": eid, "status": "error", "reason": str(e)[:50]})
@@ -307,18 +319,48 @@ async def batch_import_employees(
     admin_user: dict = Depends(_require_perm("users.import")),
     db: AsyncSession = Depends(get_db),
 ):
-    from app.auth import create_user as _create, check_employee_ids as _check
-    existing = await _check(db, req.employee_ids)
+    from app.auth import create_user as _create, check_employee_ids as _check, generate_strong_password
+
+    # Normalize to structured rows: prefer `users`, fall back to legacy `employee_ids`.
+    if req.users:
+        rows = [
+            {"employee_id": u.employee_id.strip(), "username": u.username.strip(),
+             "display_name": u.display_name.strip(), "password": u.password or ""}
+            for u in req.users
+        ]
+    else:
+        rows = [{"employee_id": eid.strip(), "username": "", "display_name": "", "password": ""}
+                for eid in req.employee_ids]
+    rows = [r for r in rows if r["employee_id"]]
+
+    # Reject duplicate employee IDs within the file (first occurrence wins).
+    seen, cleaned = set(), []
+    for r in rows:
+        if r["employee_id"] in seen:
+            continue
+        seen.add(r["employee_id"])
+        cleaned.append(r)
+    rows = cleaned
+
+    existing = await _check(db, [r["employee_id"] for r in rows])
     results = []
-    for eid in req.employee_ids:
-        if any(r["employee_id"] == eid and r["registered"] for r in existing):
+    for r in rows:
+        eid = r["employee_id"]
+        if any(x["employee_id"] == eid and x["registered"] for x in existing):
             results.append({"employee_id": eid, "status": "skipped", "reason": "工号已存在"})
             continue
+        # Defaults: username/display_name fall back to employee_id;
+        # password falls back to default_password, then auto-generated.
+        username = r["username"] or eid
+        display_name = r["display_name"] or username or eid
+        password = r["password"] or req.default_password or generate_strong_password()
         try:
-            user = await _create(db, username=eid, password=req.default_password, employee_id=eid, display_name=eid)
+            await _create(db, username=username, password=password,
+                          employee_id=eid, display_name=display_name)
             results.append({"employee_id": eid, "status": "created"})
         except Exception as e:
-            results.append({"employee_id": eid, "status": "error", "reason": str(e)[:50]})
+            msg = getattr(e, "detail", None) or str(e)
+            results.append({"employee_id": eid, "status": "error", "reason": str(msg)[:80]})
     return {"results": results, "total": len(results), "created": sum(1 for r in results if r["status"] == "created")}
 
 
