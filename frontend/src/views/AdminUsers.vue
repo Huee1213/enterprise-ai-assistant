@@ -1017,9 +1017,9 @@ async function executeClearUserData() {
     <ConfirmDialog v-if="confirmClearUserData" title="清空数据" message="确定清空该用户的所有对话记录、记忆事实和摘要？不可恢复。" destructive @confirm="executeClearUserData" @cancel="() => confirmClearUserData = false" />
 
     <!-- Add user dialog (single create / batch import) -->
-    <Teleport to="body"><Transition name="dialog">
-      <div v-if="showAddDialog" key="add" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" @click="closeAddDialog">
-        <div class="bg-card border border-border rounded-xl w-full max-w-2xl shadow-2xl dialog-pop overflow-hidden flex flex-col max-h-[92vh]" @click.stop>
+    <Teleport to="body">
+      <div v-if="showAddDialog" key="add" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in" @click="closeAddDialog">
+        <div class="bg-card border border-border rounded-xl w-full max-w-2xl shadow-2xl animate-scale-in overflow-hidden flex flex-col max-h-[92vh]" @click.stop>
           <div class="px-5 py-4 border-b border-border flex items-center justify-between shrink-0">
             <div class="flex items-center gap-2.5">
               <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -1208,14 +1208,12 @@ async function executeClearUserData() {
           </div>
         </div>
       </div>
-    
-
-</Transition></Teleport>
+    </Teleport>
 
     <!-- Edit dialog -->
-    <Teleport to="body"><Transition name="dialog">
-      <div v-if="showEdit && editUser" key="edit" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" @click="closeEdit">
-        <div class="bg-card border border-border rounded-xl w-full max-w-lg shadow-xl dialog-pop overflow-hidden" @click.stop>
+    <Teleport to="body">
+      <div v-if="showEdit && editUser" key="edit" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in" @click="closeEdit">
+        <div class="bg-card border border-border rounded-xl w-full max-w-lg shadow-xl animate-scale-in overflow-hidden" @click.stop>
           <div class="px-5 py-4 border-b border-border flex items-center justify-between">
             <h2 class="text-sm font-semibold">编辑{{ editUser.role === 'admin' || editUser.role === 'super_admin' ? '管理员' : '员工' }} — {{ editUser.username }}</h2>
             <button @click="closeEdit" class="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
@@ -1253,14 +1251,12 @@ async function executeClearUserData() {
         </div>
       </div>
     </div>
-    
-
-</Transition></Teleport>
+    </Teleport>
 
     <!-- Data Manager dialog -->
-    <Teleport to="body"><Transition name="dialog">
-      <div v-if="showDm && dmUser" key="dm" class="fixed inset-0 z-[9999] flex items-start justify-center bg-black/40 backdrop-blur-sm p-4 pt-12 overflow-y-auto" @click="closeDm">
-        <div class="bg-card border border-border rounded-xl w-full max-w-2xl shadow-xl dialog-pop overflow-hidden" @click.stop>
+    <Teleport to="body">
+      <div v-if="showDm && dmUser" key="dm" class="fixed inset-0 z-[9999] flex items-start justify-center bg-black/40 backdrop-blur-sm p-4 pt-12 overflow-y-auto animate-fade-in" @click="closeDm">
+        <div class="bg-card border border-border rounded-xl w-full max-w-2xl shadow-xl animate-scale-in overflow-hidden" @click.stop>
           <div class="px-5 py-4 border-b border-border flex items-center justify-between">
             <h2 class="text-sm font-semibold">数据管理 — {{ dmUser.display_name || dmUser.username }}</h2>
             <button @click="closeDm" class="rounded-md p-1 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg></button>
@@ -1422,14 +1418,12 @@ async function executeClearUserData() {
           </div>
         </div>
       </div>
-    
-
-</Transition></Teleport>
+    </Teleport>
 
     <!-- Permission editor dialog -->
-    <Teleport to="body"><Transition name="dialog">
-      <div v-if="permEditingAdmin" key="perm" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4" @click="permEditingAdmin = null">
-        <div class="bg-card border border-border rounded-xl w-full max-w-lg shadow-2xl dialog-pop overflow-hidden" @click.stop>
+    <Teleport to="body">
+      <div v-if="permEditingAdmin" key="perm" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in" @click="permEditingAdmin = null">
+        <div class="bg-card border border-border rounded-xl w-full max-w-lg shadow-2xl animate-scale-in overflow-hidden" @click.stop>
           <div class="px-5 py-4 border-b border-border flex items-center justify-between bg-muted/20">
             <div class="flex items-center gap-2.5">
               <div class="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -1476,8 +1470,6 @@ async function executeClearUserData() {
         </div>
       </div>
     </div>
-    
-
-</Transition></Teleport>
+    </Teleport>
   </div>
 </template>

@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     embedding_model: str = "text-embedding-3-small"
     embedding_api_key: Optional[str] = None
     embedding_api_base: Optional[str] = None
+    # Provider used to download local embedding models (HF-compatible mirror).
+    embedding_download_provider: str = "https://hf-mirror.com"
 
     # Milvus
     milvus_uri: str = "http://milvus:19530"

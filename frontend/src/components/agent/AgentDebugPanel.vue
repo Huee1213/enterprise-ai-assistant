@@ -286,9 +286,8 @@ onUnmounted(() => {
 
     <!-- ── Step detail viewer ── -->
     <Teleport to="body">
-      <Transition name="dialog">
-      <div v-if="detail" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4" @click="closeDetail">
-        <div class="bg-card border border-border rounded-xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[86vh] overflow-hidden dialog-pop" @click.stop>
+      <div v-if="detail" class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in" @click="closeDetail">
+        <div class="bg-card border border-border rounded-xl w-full max-w-3xl shadow-2xl flex flex-col max-h-[86vh] overflow-hidden animate-scale-in" @click.stop>
           <!-- Header -->
           <div class="px-5 py-3.5 border-b border-border flex items-center gap-3 shrink-0">
             <span class="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-bold"
@@ -339,7 +338,6 @@ onUnmounted(() => {
           </div>
         </div>
       </div>
-      </Transition>
     </Teleport>
   </div>
 </template>

@@ -1,7 +1,12 @@
 import json
+import asyncio
 import logging
 import httpx
+import queue
+import threading
+from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy import select, delete as sql_delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel
@@ -26,6 +31,7 @@ DEFAULT_CONFIG = {
     "embedding_model": settings.embedding_model,
     "embedding_api_key": settings.embedding_api_key or "",
     "embedding_api_base": settings.embedding_api_base or "",
+    "embedding_download_provider": settings.embedding_download_provider,
     "top_k": settings.top_k,
     "score_threshold": settings.score_threshold,
     "chunk_size": settings.chunk_size,
@@ -333,3 +339,231 @@ async def fetch_models(
     except Exception as e:
         logger.warning("fetch models error: %s", e)
         raise HTTPException(status_code=500, detail="获取模型列表失败，请稍后重试")
+
+
+# ── Embedding local model: prepare (download with progress) + apply (rebuild) ──
+
+@router.get("/config/embedding/models")
+async def embedding_models(current_user: dict = Depends(get_current_user)):
+    """List local (fastembed) supported embedding models with dim/size/cached."""
+    _require_agent_perm(current_user)
+    from app.vector.model_downloader import list_local_candidates, is_local_model_ready
+    items = []
+    for m in list_local_candidates():
+        try:
+            mid = str(m.get("model") or "")
+            if not mid:
+                continue
+            if not (m.get("sources") or {}).get("hf") and not (m.get("model_file")):
+                continue
+        except Exception:
+            continue
+        items.append({
+            "id": "local/" + mid,
+            "name": mid,
+            "dim": int(m.get("dim") or 0),
+            "size_gb": float(m.get("size_in_GB") or 0.0),
+            "description": (m.get("description") or "")[:120],
+            "cached": is_local_model_ready("local/" + mid),
+        })
+    items.sort(key=lambda x: (x["name"].lower(),))
+    return {"models": items, "total": len(items)}
+
+class EmbeddingPrepareRequest(BaseModel):
+    model: str = ""
+    provider: str = ""
+
+
+def _sses(obj: dict) -> str:
+    """Encode one SSE event line."""
+    return "data: " + json.dumps(obj, ensure_ascii=False) + "\n\n"
+
+
+def _require_agent_perm(current_user: dict):
+    if not current_user.get("is_super_admin"):
+        perms = current_user.get("permissions") or []
+        if "agent.config" not in perms:
+            raise HTTPException(status_code=403, detail="无权限")
+
+
+@router.post("/config/embedding/prepare")
+async def embedding_prepare(
+    req: EmbeddingPrepareRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Stream progress while ensuring the local embedding model is available.
+
+    Emits SSE events: {stage}, {progress}, then {status: ready|error}.
+    The configured download provider is used; on failure the official Hub is
+    retried automatically.
+    """
+    _require_agent_perm(current_user)
+
+    from app.vector.model_downloader import resolve_local_model, is_local_model_ready, download_model
+
+    model = (req.model or "").strip()
+    if not model or not model.lower().startswith("local/"):
+        return StreamingResponse(_sse_events([{"status": "error", "detail": "仅支持本地模型（local/ 前缀）"}]), media_type="text/event-stream")
+
+    # Provider: request value -> stored override -> env default
+    provider = (req.provider or "").strip() or ""
+    if not provider:
+        try:
+            result = await db.execute(select(AgentConfig).order_by(AgentConfig.id.desc()).limit(1))
+            row = result.scalar_one_or_none()
+            if row and row.config_json:
+                provider = (json.loads(row.config_json) or {}).get("embedding_download_provider", "")
+        except Exception:
+            provider = ""
+    provider = provider or settings.embedding_download_provider
+
+    q: "queue.Queue" = queue.Queue()
+
+    def _run():
+        try:
+            spec = resolve_local_model(model)
+        except ValueError as e:
+            q.put(("error", str(e)))
+            return
+        if is_local_model_ready(model):
+            q.put(("ready", {"model": model, "cached": True, "repo": spec["hf_repo"]}))
+            return
+
+        def _on_progress(p, msg):
+            q.put(("progress", {"progress": round(p, 4) if p is not None else None, "message": msg}))
+
+        def _on_stage(stage):
+            q.put(("stage", stage))
+
+        try:
+            r = download_model(spec, provider, _on_progress, _on_stage)
+            q.put(("ready", {"model": model, "cached": bool(r.get("cached")), "repo": r.get("repo"), "provider": r.get("provider")}))
+        except Exception as e:  # noqa: BLE001
+            q.put(("error", str(e)))
+
+    thread = threading.Thread(target=_run, daemon=True)
+
+    async def _gen():
+        thread.start()
+        while thread.is_alive() or not q.empty():
+            try:
+                kind, payload = q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+            if kind == "error":
+                yield _sses({"status": "error", "detail": payload})
+                return
+            if kind == "stage":
+                yield _sses({"stage": payload})
+            elif kind == "progress":
+                yield _sses({"stage": "downloading", "progress": payload["progress"], "message": payload["message"]})
+            elif kind == "ready":
+                yield _sses({"status": "ready", **payload})
+                return
+        yield _sses({"status": "error", "detail": "下载中断"})
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _drop_vector_collection() -> None:
+    from pymilvus import MilvusClient
+    client = MilvusClient(uri=settings.milvus_uri)
+    try:
+        if client.has_collection(settings.milvus_collection):
+            client.drop_collection(settings.milvus_collection)
+    finally:
+        client.close()
+
+
+@router.post("/config/embedding/apply")
+async def embedding_apply(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Rebuild the vector store & reindex all documents with the NEW embedding.
+
+    Runs only after the embedding config has been saved. Verifies the new
+    embedding works before dropping the old collection so a failed model never
+    leaves the system without data.
+    """
+    _require_agent_perm(current_user)
+
+    async def _gen():
+        # 1) Build the new embeddings from effective config and verify they work.
+        from app.vector.embeddings import get_embeddings_async
+        try:
+            emb = await get_embeddings_async()
+            probe = await asyncio.to_thread(emb.embed_query, "维度探测 probe test 测试")
+            dim = len(probe)
+            yield _sses({"stage": "verify", "message": f"新嵌入模型可用（维度 {dim}）"})
+        except Exception as e:  # noqa: BLE001
+            yield _sses({"status": "error", "detail": f"嵌入模型不可用: {str(e)[:160]}"})
+            return
+
+        # 2) Drop old collection (different dim) then rebuild the wrapper.
+        try:
+            await asyncio.to_thread(_drop_vector_collection)
+            yield _sses({"stage": "rebuild", "message": "底层向量库已重建，正在重新索引文档…"})
+        except Exception as e:  # noqa: BLE001
+            yield _sses({"status": "error", "detail": f"重建向量库失败: {str(e)[:160]}"})
+            return
+
+        from app.vector.store import rebuild_vector_store, get_vector_store
+        from app.documents.registry import list_document_entries
+        from langchain_core.documents import Document
+        try:
+            rebuild_vector_store()
+            store = get_vector_store()
+        except Exception as e:  # noqa: BLE001
+            yield _sses({"status": "error", "detail": f"初始化向量库失败: {str(e)[:160]}"})
+            return
+
+        entries = list_document_entries() or []
+        total = sum(len(e.get("chunks") or []) for e in entries)
+        done = 0
+        try:
+            for e in entries:
+                chunks = e.get("chunks") or []
+                if not chunks:
+                    continue
+                # Replicate the exact metadata shape used by the document uploader
+                # (source/doc_id/chunk_index/file_hash/uploaded_at) so the rebuilt
+                # Milvus schema/query fields match and retrieval keeps working.
+                import hashlib
+                joined = " ".join((c.get("content") or "") for c in chunks)
+                file_hash = hashlib.md5(joined.encode("utf-8")).hexdigest()
+                uploaded_at = e.get("uploaded_at") or __import__("datetime").datetime.now().isoformat()
+                docs = [
+                    Document(
+                        page_content=(c.get("content") or ""),
+                        metadata={
+                            "source": (e.get("filename") or ""),
+                            "doc_id": (e.get("id") or ""),
+                            "chunk_index": int(c.get("index", 0) or 0),
+                            "file_hash": file_hash,
+                            "uploaded_at": uploaded_at,
+                        },
+                    )
+                    for c in chunks
+                ]
+                await asyncio.to_thread(store.add_documents, docs)
+                done += len(docs)
+                yield _sses({
+                    "stage": "indexing",
+                    "done": done,
+                    "total": total,
+                    "progress": round(done / total, 4) if total else 1.0,
+                })
+        except Exception as e:  # noqa: BLE001
+            try:
+                yield _sses({"status": "error", "detail": f"文档索引失败: {str(e)[:160]}"})
+            except Exception:
+                pass
+            return
+        try:
+            yield _sses({"status": "ok", "indexed": done, "dim": dim, "total": total})
+        except Exception:
+            pass
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")

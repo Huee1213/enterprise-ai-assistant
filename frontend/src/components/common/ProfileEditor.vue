@@ -151,13 +151,12 @@ defineExpose({ open })
 
 <template>
   <Teleport to="body">
-    <Transition name="dialog">
     <div
       v-if="visible"
-      class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+      class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm p-4 animate-fade-in"
       @click="close"
     >
-      <div class="bg-card border border-border rounded-xl w-full max-w-md shadow-2xl dialog-pop overflow-hidden" @click.stop>
+      <div class="bg-card border border-border rounded-xl w-full max-w-md shadow-2xl animate-scale-in overflow-hidden" @click.stop>
         <!-- Header -->
         <div class="px-5 py-4 border-b border-border flex items-center justify-between">
           <div class="flex items-center gap-2.5">
@@ -276,6 +275,5 @@ defineExpose({ open })
         </div>
       </div>
     </div>
-    </Transition>
   </Teleport>
 </template>

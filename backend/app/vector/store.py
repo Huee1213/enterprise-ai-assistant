@@ -38,6 +38,23 @@ def rebuild_vector_store() -> Milvus:
     return get_vector_store(reuse=False)
 
 
+def _guarded(fn, *args, **kwargs):
+    """Run an operation, and retry once against a freshly rebuilt vector store.
+
+    When the embedding model changes, the Milvus collection is dropped and
+    recreated with a new schema (dimension). Other gunicorn workers may still
+    hold a stale wrapper; retrying after rebuilding makes them self-heal.
+    """
+    try:
+        return fn(*args, **kwargs)
+    except Exception as e:  # noqa: BLE001
+        try:
+            rebuild_vector_store()
+        except Exception:
+            raise e
+        return fn(*args, **kwargs)
+
+
 # Last applied similarity threshold (so embed changes aren't lost on rebuild).
 _sim_threshold: float = 0.0
 
@@ -57,11 +74,15 @@ def _apply_threshold(docs: List[Document], threshold: float) -> List[Document]:
 
 
 def add_documents(documents: List[Document]) -> List[str]:
-    return get_vector_store().add_documents(documents)
+    def _op():
+        return get_vector_store().add_documents(documents)
+    return _guarded(_op)
 
 
 def similarity_search(query: str, k: int = 5, threshold: float = 0.0) -> List[Document]:
-    docs = get_vector_store().similarity_search_with_score(query, k=max(1, k))
+    def _op():
+        return get_vector_store().similarity_search_with_score(query, k=max(1, k))
+    docs = _guarded(_op)
     # Milvus similarity_search_with_score returns (Document, score) pairs.
     if docs and isinstance(docs[0], tuple):
         filtered = []
