@@ -20,6 +20,13 @@ const chatContainerRef = ref<InstanceType<typeof ChatContainer> | null>(null)
 const FOLLOW_LATEST = '__latest__'
 const followMsgId = ref<string>(FOLLOW_LATEST)
 
+// Admin clicked "查看" on a message's Agent status bar:
+// open the debug panel (if closed) and focus that message's steps.
+function onViewSteps(msgId: string) {
+  followMsgId.value = msgId
+  if (auth.isAdmin && !showDebug.value) showDebug.value = true
+}
+
 // Resizable debug panel width (desktop)
 const debugWidth = ref(440)
 let resizing = false
@@ -139,39 +146,67 @@ function openProfileEditor() {
         </div>
       </header>
 
-      <ChatContainer ref="chatContainerRef" :follow-msg-id="followMsgId" @view-steps="followMsgId = $event" />
+      <ChatContainer ref="chatContainerRef" :follow-msg-id="followMsgId" @view-steps="onViewSteps" />
     </div>
 
     <!-- Agent debug panel -->
-    <div v-if="auth.isAdmin">
-      <!-- Mobile: slide-out drawer -->
-      <template v-if="showDebug">
-        <div class="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm md:hidden" @click="showDebug = false" />
-        <div class="fixed inset-y-0 right-0 z-40 w-[88vw] max-w-[500px] bg-card border-l border-border shadow-xl md:hidden flex flex-col">
-          <div class="flex items-center justify-end px-3 pt-2 shrink-0">
-            <button @click="showDebug = false" class="rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted" title="关闭调试面板">
-              <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
-            </button>
-          </div>
+    <div v-if="auth.isAdmin" class="h-full shrink-0">
+      <!-- Mobile: slide-out drawer (overlay is expected on phones) -->
+      <Transition name="drawer-slide">
+        <div v-if="showDebug" class="fixed inset-y-0 right-0 z-40 w-[88vw] max-w-[500px] bg-card border-l border-border shadow-xl md:hidden flex flex-col">
+          <div class="absolute inset-0 -z-10 bg-black/40 backdrop-blur-sm" @click="showDebug = false" />
           <div class="flex-1 flex flex-col min-h-0 overflow-hidden">
-            <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" />
+            <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" @close="showDebug = false" />
           </div>
         </div>
-      </template>
-      <!-- Desktop: resizable side panel -->
-      <div v-if="showDebug" class="hidden md:flex flex-col border-l border-border bg-card shrink-0 h-full relative overflow-hidden min-h-0" :style="{ width: debugWidth + 'px' }">
-        <!-- Drag handle -->
-        <div
-          @pointerdown="startResize"
-          class="absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize select-none group"
-          title="拖动调整面板宽度"
-        >
-          <div class="w-1 h-full mx-auto bg-transparent group-hover:bg-primary/50 group-active:bg-primary transition-colors" />
+      </Transition>
+      <!-- Desktop: occupies layout width + full height, does NOT overlay the chat -->
+      <Transition name="panel-in">
+        <div v-if="showDebug" class="hidden md:flex flex-col border-l border-border bg-card overflow-hidden min-h-0 relative h-full" :style="{ width: debugWidth + 'px' }">
+          <!-- Drag handle -->
+          <div
+            @pointerdown="startResize"
+            class="absolute left-0 top-0 bottom-0 w-2 z-10 cursor-col-resize select-none group"
+            title="拖动调整面板宽度"
+          >
+            <div class="w-1 h-full mx-auto bg-transparent group-hover:bg-primary/50 group-active:bg-primary transition-colors" />
+          </div>
+          <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" @close="showDebug = false" />
         </div>
-        <AgentDebugPanel :follow-msg-id="followMsgId" @follow-change="followMsgId = $event" />
-      </div>
+      </Transition>
     </div>
   </div>
 
   <ProfileEditor ref="profileEditorRef" />
 </template>
+
+<style scoped>
+/* Mobile drawer: full slide-in from the right (overlay) */
+.drawer-slide-enter-active {
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+.drawer-slide-leave-active {
+  transition: transform 0.22s ease, opacity 0.22s ease;
+}
+.drawer-slide-enter-from,
+.drawer-slide-leave-to {
+  transform: translateX(100%);
+  opacity: 0;
+}
+
+/* Desktop panel: fades in with a subtle slide, stays in-flow (no overlay) */
+.panel-in-enter-active {
+  transition: opacity 0.24s ease, transform 0.24s ease;
+}
+.panel-in-leave-active {
+  transition: opacity 0.18s ease, transform 0.18s ease;
+}
+.panel-in-enter-from {
+  opacity: 0;
+  transform: translateX(18px);
+}
+.panel-in-leave-to {
+  opacity: 0;
+  transform: translateX(18px);
+}
+</style>

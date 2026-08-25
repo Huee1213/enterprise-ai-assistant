@@ -11,7 +11,7 @@ interface ModelItem {
 // Field-level usage descriptions shown via the help icon tooltip.
 const FIELD_DESC: Record<string, string> = {
   llm_provider: '选择大语言模型的供应商（OpenAI / DeepSeek / OpenRouter / Anthropic / Ollama / 自定义）。切换后需按对应服务的接入信息填写密钥与地址。',
-  llm_api_key: '调用大语言模型的人力 API 密钥。保存后以掩码形式显示，不会回显明文；修改时需重新输入完整密钥。',
+  llm_api_key: '调用大语言模型的能力 API 密钥。保存后以掩码形式显示，不会回显明文；修改时需重新输入完整密钥。',
   llm_api_base: '模型服务的接口基础地址，需与所选供应商匹配（如 OpenAI 为 https://api.openai.com/v1）。',
   llm_model: '实际用于对话生成与 Agent 推理的模型名称。可点击刷新从供应商拉取当前可用模型列表。',
   llm_temperature: '控制回答随机性（0-2）。值越低回答越稳定保守，适合知识问答；越高越有创意，适合头脑风暴。',
@@ -89,20 +89,6 @@ const filteredEmbModels = computed(() => {
   return embFetchedModels.value.filter(m => m.id.toLowerCase().includes(q) || m.name.toLowerCase().includes(q))
 })
 
-const diffCount = computed(() => {
-  let n = 0
-  for (const k of Object.keys(defaults.value)) {
-    // Skip masked key fields — dots length differs between .env and DB
-    if (k === 'llm_api_key' || k === 'embedding_api_key') continue
-    const v = config.value[k]
-    if (k in config.value && v !== defaults.value[k]) {
-      if (v === '' || v === null || v === undefined) continue
-      n++
-    }
-  }
-  return n
-})
-
 const canReset = computed(() => {
   for (const k of Object.keys(envDefaults.value)) {
     if (k === 'llm_api_key' || k === 'embedding_api_key') continue
@@ -115,10 +101,104 @@ const canReset = computed(() => {
   return false
 })
 
-const hasKeyEdit = computed(() => {
-  return (llmApiKey.value && !llmApiKey.value.includes('•')) ||
-         (embApiKey.value && !embApiKey.value.includes('•'))
-})
+const llmHasKeyEdit = computed(() =>
+  llmApiKey.value && !llmApiKey.value.includes('•')
+)
+const embHasKeyEdit = computed(() =>
+  embApiKey.value && !embApiKey.value.includes('•')
+)
+
+// ── Sectioned layout: independent tabs, each saved separately ──────────────
+type SectionKey = 'llm' | 'embed' | 'retrieval' | 'agent'
+const SECTION_KEYS: Record<SectionKey, string[]> = {
+  llm: ['llm_provider', 'llm_api_key', 'llm_api_base', 'llm_model', 'llm_temperature', 'llm_max_tokens'],
+  embed: ['embedding_provider', 'embedding_model', 'embedding_api_key', 'embedding_api_base'],
+  retrieval: ['top_k', 'score_threshold', 'chunk_size', 'chunk_overlap'],
+  agent: ['system_prompt', 'enable_web_search', 'enable_knowledge_search', 'enable_summarize', 'enable_time_tool', 'max_tool_rounds'],
+}
+const SECTION_LABEL: Record<SectionKey, string> = {
+  llm: 'LLM 模型',
+  embed: '向量嵌入',
+  retrieval: '检索参数',
+  agent: 'Agent 行为',
+}
+const activeTab = ref<SectionKey>('llm')
+
+function sectionDiffCount(section: SectionKey): number {
+  let n = 0
+  for (const k of SECTION_KEYS[section]) {
+    if (k === 'llm_api_key' || k === 'embedding_api_key') continue
+    const v = config.value[k]
+    if (k in config.value && v !== defaults.value[k]) {
+      if (v === '' || v === null || v === undefined) continue
+      n++
+    }
+  }
+  return n
+}
+
+function sectionCanSave(section: SectionKey): boolean {
+  if (sectionDiffCount(section) > 0) return true
+  if (section === 'llm') return llmHasKeyEdit.value
+  if (section === 'embed') return embHasKeyEdit.value
+  return false
+}
+
+const resettingSection = ref<SectionKey | null>(null)
+
+// Whether this section currently differs from the env defaults.
+function sectionCanReset(section: SectionKey): boolean {
+  for (const k of SECTION_KEYS[section]) {
+    if (k === 'llm_api_key' || k === 'embedding_api_key') continue
+    const def = envDefaults.value[k]
+    if (def === undefined) continue
+    if (config.value[k] !== def) return true
+  }
+  if (section === 'llm') {
+    if (envDefaults.value.llm_provider !== undefined && llmProvider.value !== envDefaults.value.llm_provider) return true
+    if (envDefaults.value.llm_api_base !== undefined && llmApiBase.value !== envDefaults.value.llm_api_base) return true
+  }
+  if (section === 'embed') {
+    if (envDefaults.value.embedding_provider !== undefined && embProvider.value !== envDefaults.value.embedding_provider) return true
+    if (envDefaults.value.embedding_model !== undefined && config.value.embedding_model !== envDefaults.value.embedding_model) return true
+    if (envDefaults.value.embedding_api_base !== undefined && embApiBase.value !== envDefaults.value.embedding_api_base) return true
+  }
+  return false
+}
+
+// Restore a single section's parameters back to the env defaults.
+// API keys are preserved (never cleared by a section reset).
+async function resetSection(section: SectionKey) {
+  if (resettingSection.value) return
+  resettingSection.value = section
+  const diff: Record<string, any> = {}
+  for (const k of SECTION_KEYS[section]) {
+    if (k === 'llm_api_key' || k === 'embedding_api_key') continue // keep secrets
+    const def = envDefaults.value[k]
+    if (def === undefined) continue
+    if (config.value[k] !== def) diff[k] = def
+  }
+  if (section === 'llm') {
+    if (envDefaults.value.llm_provider !== undefined) diff.llm_provider = envDefaults.value.llm_provider
+    if (envDefaults.value.llm_api_base !== undefined && llmApiBase.value !== envDefaults.value.llm_api_base) diff.llm_api_base = envDefaults.value.llm_api_base
+  }
+  if (section === 'embed') {
+    if (envDefaults.value.embedding_provider !== undefined) diff.embedding_provider = envDefaults.value.embedding_provider
+    if (envDefaults.value.embedding_model !== undefined) diff.embedding_model = envDefaults.value.embedding_model
+    if (envDefaults.value.embedding_api_base !== undefined && embApiBase.value !== envDefaults.value.embedding_api_base) diff.embedding_api_base = envDefaults.value.embedding_api_base
+  }
+  try {
+    if (Object.keys(diff).length > 0) {
+      await apiClient.put('/agent/config', { config: diff })
+    }
+    toastMsg(`${SECTION_LABEL[section]}已恢复默认`, 'success')
+  } catch (err: any) {
+    toastMsg(err.response?.data?.detail || '恢复失败', 'error')
+  } finally {
+    resettingSection.value = null
+  }
+  await reloadConfig()
+}
 
 function isModified(key: string): boolean {
   if (key === 'llm_api_key' || key === 'embedding_api_key') return false
@@ -407,34 +487,38 @@ async function reloadConfig() {
   defaults.value = { ...config.value }
 }
 
-async function saveConfig() {
-  saving.value = true
-  config.value.llm_provider = llmProvider.value
-  config.value.llm_api_key = llmApiKey.value
-  config.value.llm_api_base = llmApiBase.value
-  config.value.embedding_provider = embProvider.value
-  config.value.embedding_api_key = embApiKey.value
-  config.value.embedding_api_base = embApiBase.value
-  try {
-    const diff: Record<string, any> = {}
-    for (const k of Object.keys(defaults.value)) {
-      if (k in config.value && config.value[k] !== defaults.value[k]) {
-        diff[k] = config.value[k]
-      }
+async function saveSection(section: SectionKey) {
+  const diff: Record<string, any> = {}
+  for (const k of SECTION_KEYS[section]) {
+    if (k in config.value && config.value[k] !== defaults.value[k]) {
+      if (config.value[k] === '' || config.value[k] === null || config.value[k] === undefined) continue
+      diff[k] = config.value[k]
     }
+  }
+  // Provider/key/base are driven by local refs; include them for this section.
+  if (section === 'llm') {
     if (llmApiKey.value) diff.llm_api_key = llmApiKey.value
     if (llmApiBase.value) diff.llm_api_base = llmApiBase.value
-    diff.llm_provider = llmProvider.value
+    if (llmProvider.value) diff.llm_provider = llmProvider.value
+  }
+  if (section === 'embed') {
     if (embApiKey.value) diff.embedding_api_key = embApiKey.value
     if (embApiBase.value) diff.embedding_api_base = embApiBase.value
-    diff.embedding_provider = embProvider.value
-
-    const resp = await apiClient.put('/agent/config', { config: diff })
-    toastMsg('配置已保存', 'success')
+    if (embProvider.value) diff.embedding_provider = embProvider.value
+  }
+  if (Object.keys(diff).length === 0) {
+    toastMsg('该区域没有修改内容', 'success')
+    return
+  }
+  saving.value = true
+  try {
+    await apiClient.put('/agent/config', { config: diff })
+    toastMsg(`${SECTION_LABEL[section]}已保存`, 'success')
   } catch (err: any) {
     toastMsg(err.response?.data?.detail || '保存失败', 'error')
+  } finally {
+    saving.value = false
   }
-  saving.value = false
   await reloadConfig()
 }
 
@@ -475,24 +559,20 @@ onMounted(loadConfig)
       <div>
         <h1 class="text-xl font-semibold">智能体配置</h1>
         <p class="text-sm text-muted-foreground mt-1">
-          管理 LLM、嵌入、检索与 Agent 行为参数
-          <span v-if="diffCount > 0 || hasKeyEdit" class="ml-2 text-amber-500/80 text-xs">({{ diffCount > 0 ? diffCount : 0 }} 项已修改)</span>
+          按分区独立配置、独立保存，保存后即时生效
         </p>
       </div>
       <div class="flex items-center gap-2">
         <button @click="resetConfig" :disabled="resetting || !canReset"
-          class="rounded-lg px-3 py-2 text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40">
+          class="rounded-lg px-3 py-2 text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+          title="清空所有配置覆盖，恢复为环境变量默认值">
           <span v-if="resetting" class="inline-flex items-center gap-1.5">
             <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>重置中...
           </span>
-          <span v-else>恢复默认</span>
-        </button>
-        <button @click="saveConfig" :disabled="saving || (diffCount === 0 && !hasKeyEdit)"
-          class="rounded-lg px-4 py-2 text-xs font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50">
-          <span v-if="saving" class="inline-flex items-center gap-1.5">
-            <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>保存中...
+          <span v-else>
+            <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline -mt-0.5 mr-1"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+            恢复全局默认
           </span>
-          <span v-else>保存配置</span>
         </button>
       </div>
     </div>
@@ -504,17 +584,43 @@ onMounted(loadConfig)
       <svg class="animate-spin text-muted-foreground" xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
     </div>
 
-    <div v-else class="space-y-4">
-      <!-- LLM Provider section (custom layout, overflow-visible so dropdown isn't clipped) -->
-      <div class="rounded-xl border border-border bg-card overflow-visible">
-        <div class="px-5 py-4 border-b border-border/50 bg-muted/20">
+    <div v-else>
+      <!-- Section tabs -->
+      <div class="flex items-center gap-1 border-b border-border mb-4 overflow-x-auto">
+        <button
+          v-for="s in (['llm','embed','retrieval','agent'] as SectionKey[])"
+          :key="s"
+          @click="activeTab = s"
+          class="relative px-4 py-2 text-sm font-medium border-b-2 transition-colors shrink-0"
+          :class="activeTab === s ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'"
+        >
+          {{ SECTION_LABEL[s] }}
+          <span v-if="sectionDiffCount(s) > 0" class="ml-1.5 inline-flex items-center rounded-full bg-amber-500/15 text-amber-600 dark:text-amber-400 text-[10px] px-1.5 py-0.5">{{ sectionDiffCount(s) }}</span>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <Transition name="sect-slide" mode="out-in">
+          <div :key="activeTab" class="space-y-4">
+        <!-- LLM Provider section (custom layout, overflow-visible so dropdown isn't clipped) -->
+        <div v-show="activeTab === 'llm'" class="rounded-xl border border-border bg-card overflow-visible">
+          <div class="px-5 py-4 border-b border-border/50 bg-muted/20">
           <div class="flex items-center justify-between">
             <div>
               <h3 class="text-sm font-semibold">LLM 模型</h3>
               <p class="text-xs text-muted-foreground mt-0.5">大语言模型连接配置，用于对话生成和 Agent 推理</p>
             </div>
-            <div v-if="['llm_provider','llm_api_key','llm_api_base','llm_model','llm_temperature','llm_max_tokens'].some(k => isModified(k)) || hasKeyEdit"
-              class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="resetSection('llm')" :disabled="resettingSection !== null || !sectionCanReset('llm')"
+                class="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1 transition-colors disabled:opacity-40"
+                title="恢复本分区为环境变量默认值（不影响其它分区，API Key 保留）">
+                <svg v-if="resettingSection === 'llm'" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                恢复默认
+              </button>
+              <div v-if="['llm_provider','llm_api_key','llm_api_base','llm_model','llm_temperature','llm_max_tokens'].some(k => isModified(k)) || llmHasKeyEdit"
+                class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            </div>
           </div>
         </div>
         <div class="px-5 py-4 space-y-4">
@@ -645,16 +751,36 @@ onMounted(loadConfig)
               <span class="text-[10px] text-muted-foreground">tokens</span>
             </div>
           </div>
+
+          <!-- LLM section save bar -->
+          <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
+            <span v-if="sectionDiffCount('llm') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('llm') }} 项</span>
+            <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
+            <button @click="saveSection('llm')" :disabled="saving || !sectionCanSave('llm')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
+              <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              {{ saving ? '保存中...' : '保存本区' }}
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Embedding -->
-      <div class="rounded-xl border border-border bg-card overflow-visible">
+      <div v-show="activeTab === 'embed'" class="rounded-xl border border-border bg-card overflow-visible">
         <div class="px-5 py-4 border-b border-border/50 bg-muted/20">
           <div class="flex items-center justify-between">
             <div><h3 class="text-sm font-semibold">向量嵌入</h3><p class="text-xs text-muted-foreground mt-0.5">文档向量化模型配置，用于知识库检索。本地模式无需 API Key</p></div>
-            <div v-if="['embedding_provider','embedding_model','embedding_api_key','embedding_api_base'].some(k => isModified(k))"
-              class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="resetSection('embed')" :disabled="resettingSection !== null || !sectionCanReset('embed')"
+                class="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1 transition-colors disabled:opacity-40"
+                title="恢复本分区为环境变量默认值（不影响其它分区，API Key 保留）">
+                <svg v-if="resettingSection === 'embed'" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                恢复默认
+              </button>
+              <div v-if="['embedding_provider','embedding_model','embedding_api_key','embedding_api_base'].some(k => isModified(k))"
+                class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            </div>
           </div>
         </div>
         <div class="px-5 py-4 space-y-4">
@@ -734,15 +860,33 @@ onMounted(loadConfig)
               </button>
             </div>
           </div>
+          <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
+            <span v-if="sectionDiffCount('embed') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('embed') }} 项</span>
+            <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
+            <button @click="saveSection('embed')" :disabled="saving || !sectionCanSave('embed')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
+              <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              {{ saving ? '保存中...' : '保存本区' }}
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Retrieval -->
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div v-show="activeTab === 'retrieval'" class="rounded-xl border border-border bg-card overflow-hidden">
         <div class="px-5 py-4 border-b border-border/50 bg-muted/20">
           <div class="flex items-center justify-between">
             <div><h3 class="text-sm font-semibold">检索参数</h3><p class="text-xs text-muted-foreground mt-0.5">知识库检索行为控制，影响召回质量和 Token 消耗</p></div>
-            <div v-if="['top_k','score_threshold','chunk_size','chunk_overlap'].some(k => isModified(k))" class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="resetSection('retrieval')" :disabled="resettingSection !== null || !sectionCanReset('retrieval')"
+                class="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1 transition-colors disabled:opacity-40"
+                title="恢复本分区为环境变量默认值（不影响其它分区）">
+                <svg v-if="resettingSection === 'retrieval'" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                恢复默认
+              </button>
+              <div v-if="['top_k','score_threshold','chunk_size','chunk_overlap'].some(k => isModified(k))" class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            </div>
           </div>
         </div>
         <div class="px-5 py-4 space-y-4">
@@ -774,16 +918,34 @@ onMounted(loadConfig)
               <span class="text-[10px] text-muted-foreground whitespace-nowrap">{{ f.unit }}</span>
             </div>
           </div>
+          <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
+            <span v-if="sectionDiffCount('retrieval') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('retrieval') }} 项</span>
+            <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
+            <button @click="saveSection('retrieval')" :disabled="saving || !sectionCanSave('retrieval')"
+              class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
+              <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              {{ saving ? '保存中...' : '保存本区' }}
+            </button>
+          </div>
         </div>
       </div>
 
       <!-- Agent Behavior -->
-      <div class="rounded-xl border border-border bg-card overflow-hidden">
+      <div v-show="activeTab === 'agent'" class="rounded-xl border border-border bg-card overflow-hidden">
         <div class="px-5 py-4 border-b border-border/50 bg-muted/20">
           <div class="flex items-center justify-between">
             <div><h3 class="text-sm font-semibold">Agent 行为</h3><p class="text-xs text-muted-foreground mt-0.5">AI Agent 的回复风格和工具使用控制</p></div>
-            <div v-if="['system_prompt','enable_web_search','enable_knowledge_search','enable_summarize','enable_time_tool','max_tool_rounds'].some(k => isModified(k))"
-              class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            <div class="flex items-center gap-2 shrink-0">
+              <button @click="resetSection('agent')" :disabled="resettingSection !== null || !sectionCanReset('agent')"
+                class="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground border border-border rounded-md px-2 py-1 transition-colors disabled:opacity-40"
+                title="恢复本分区为环境变量默认值（不影响其它分区）">
+                <svg v-if="resettingSection === 'agent'" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                <svg v-else xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+                恢复默认
+              </button>
+              <div v-if="['system_prompt','enable_web_search','enable_knowledge_search','enable_summarize','enable_time_tool','max_tool_rounds'].some(k => isModified(k))"
+                class="text-[10px] text-amber-500 bg-amber-500/10 rounded-md px-2 py-0.5 font-medium">已修改</div>
+            </div>
           </div>
         </div>
         <div class="px-5 py-4 space-y-4">
@@ -812,8 +974,38 @@ onMounted(loadConfig)
               <span class="text-xs font-mono text-muted-foreground tabular-nums w-12 text-right">{{ config.max_tool_rounds }}</span>
             </div>
           </div>
+            <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
+              <span v-if="sectionDiffCount('agent') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('agent') }} 项</span>
+              <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
+              <button @click="saveSection('agent')" :disabled="saving || !sectionCanSave('agent')"
+                class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
+                <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                {{ saving ? '保存中...' : '保存本区' }}
+              </button>
+            </div>
         </div>
       </div>
+          </div>
+        </Transition>
+    </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+/* Section tab switch transition: slide + fade */
+.sect-slide-enter-active {
+  transition: opacity 0.22s ease, transform 0.22s ease;
+}
+.sect-slide-leave-active {
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.sect-slide-enter-from {
+  opacity: 0;
+  transform: translateX(14px);
+}
+.sect-slide-leave-to {
+  opacity: 0;
+  transform: translateX(-10px);
+}
+</style>

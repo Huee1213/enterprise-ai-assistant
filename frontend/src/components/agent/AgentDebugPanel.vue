@@ -5,7 +5,7 @@ import type { AgentStep, Message } from '@/types'
 
 const FOLLOW_LATEST = '__latest__'
 const props = withDefaults(defineProps<{ followMsgId?: string }>(), { followMsgId: FOLLOW_LATEST })
-const emit = defineEmits<{ followChange: [msgId: string] }>()
+const emit = defineEmits<{ followChange: [msgId: string]; close: [] }>()
 
 const chat = useChatStore()
 
@@ -171,7 +171,14 @@ onUnmounted(() => {
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="text-primary shrink-0"><circle cx="12" cy="12" r="10"/><path d="M16 8h-6a2 2 0 1 0 0 4h4a2 2 0 1 1 0 4H8"/><path d="M12 18V6"/></svg>
           Agent 调试
         </h2>
-        <span v-if="effectiveMsg" class="ml-auto text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full shrink-0">{{ timeline.length }} 步</span>
+        <span v-if="effectiveMsg" class="text-[10px] font-normal text-muted-foreground bg-muted px-1.5 py-0.5 rounded-full shrink-0">{{ timeline.length }} 步</span>
+        <button
+          @click="emit('close')"
+          class="ml-auto inline-flex items-center gap-1 rounded-md p-1.5 text-muted-foreground hover:text-foreground hover:bg-muted transition-colors shrink-0"
+          title="关闭调试面板"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+        </button>
       </div>
 
       <!-- Message selector: follow a specific message or auto latest -->
