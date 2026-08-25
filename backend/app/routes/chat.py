@@ -228,18 +228,19 @@ async def generate_title(request: TitleRequest, current_user: dict = Depends(get
     try:
         if settings.llm_api_key and settings.llm_api_key != "sk-your-key-here":
             llm = await _get_llm()
-            from langchain_core.messages import SystemMessage, HumanMessage
+            from langchain_core.messages import HumanMessage
             prompt = (
-                "根据用户的第一条消息和AI的回复，生成一个简洁的对话标题（3-8个字）。"
-                "只输出标题本身，不要引号，不要多余文字。\n\n"
-                f"{request.message}"
+                f"为对话『{request.message[:120]}』生成一个3-6个字的中文标题，只输出标题本身。"
             )
-            resp = await llm.ainvoke([
-                SystemMessage(content="你是一个对话标题生成器。"),
-                HumanMessage(content=prompt),
-            ])
-            t = resp.content.strip().strip('"').strip("'").split('\n')[0].strip()[:20]
-            if 1 < len(t) <= 20 and len(t) < len(request.message):
+            resp = await llm.ainvoke([HumanMessage(content=prompt)])
+            content = resp.content
+            if isinstance(content, list):
+                parts = []
+                for b in content:
+                    parts.append(str(b.get("text", "") or b.get("content", "") or "") if isinstance(b, dict) else str(b))
+                content = "".join(parts)
+            t = str(content or "").strip().strip('"').strip("'").split('\n')[0].strip()[:20]
+            if 1 < len(t) <= 20 and len(t) < len(request.message) and "标题" not in t and "生成" not in t:
                 title = t
     except Exception:
         pass
@@ -459,20 +460,38 @@ async def regenerate_title(
     new_title = ""
     try:
         from langchain_openai import ChatOpenAI
-        from langchain_core.messages import SystemMessage, HumanMessage
-        llm = ChatOpenAI(model=settings.llm_model, temperature=0.1, max_tokens=15, api_key=settings.llm_api_key, base_url=settings.llm_api_base)
-        # Build a shorter, clearer prompt
+        from langchain_core.messages import HumanMessage
+        # Use the DB-effective model/key/base (same as chat + generate_title),
+        # not the env defaults — otherwise regenerating uses a mismatched model.
+        from app.agent.runtime_config import get_effective_config as _get_eff
+        _cfg = await _get_eff()
+        _cfg = _cfg or {}
+        llm = ChatOpenAI(
+            model=_cfg.get("llm_model") or settings.llm_model,
+            temperature=0.7,
+            max_tokens=64,
+            api_key=_cfg.get("llm_api_key") or settings.llm_api_key,
+            base_url=_cfg.get("llm_api_base") or settings.llm_api_base,
+        )
+        # Concise, direct instruction — this model is unreliable with long
+        # system-prefixed title prompts and may return empty content.
         text_for_llm = summary[:100] if summary else ""
         if not text_for_llm and history:
-            first = next((h["content"][:50] for h in history if h["role"] == "user"), "")
-            text_for_llm = first
+            msgs = [f"{'用户' if h['role'] == 'user' else 'AI'}: {h['content'][:60]}" for h in history[:4]]
+            text_for_llm = "\n".join(msgs)
+        text_for_llm = text_for_llm.replace("\n", "；")
         if text_for_llm:
             resp = await llm.ainvoke([
-                SystemMessage(content="你是标题生成器。只输出3-6个字的标题，不要解释。"),
-                HumanMessage(content=f"为这段话生成标题: {text_for_llm}"),
+                HumanMessage(content=f"为对话『{text_for_llm[:120]}』生成一个3-6个字的中文标题，只输出标题本身。"),
             ])
-            t = resp.content.strip().strip('"').strip("'").split('\n')[0].strip()[:15]
-            if t and len(t) <= 12 and len(t) >= 2 and "标题" not in t and "生成" not in t:
+            content = resp.content
+            if isinstance(content, list):
+                parts = []
+                for b in content:
+                    parts.append(str(b.get("text", "") or b.get("content", "") or "") if isinstance(b, dict) else str(b))
+                content = "".join(parts)
+            t = str(content or "").strip().strip('"').strip("'").split('\n')[0].strip()[:15]
+            if t and len(t) <= 12 and len(t) >= 2 and "标题" not in t and "生成" not in t and t != "(无内容)":
                 new_title = t
     except Exception:
         pass

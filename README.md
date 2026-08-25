@@ -15,7 +15,7 @@
 - **🔍 本地搜索引擎 (SearXNG)** — 自托管元搜索引擎，聚合 Google/Bing/Brave/Startpage 等，无需 API Key
 - **🧠 长短期记忆系统** — PostgreSQL 持久化偏好/对话历史/自动摘要；LLM 事实提取去重、单人上限 200 条；摘要按对话隔离
 - **⚡ 非阻塞流式输出** — SSE 逐 Token 流式传输 + 独立线程池执行，Markdown 渲染 + 推理步骤实时可见
-- **📋 对话管理** — 单条删除/重生成/复制/改问，重生成仅覆盖对应消息；支持按标题检索历史对话、Ctrl+F 对话内搜索跳转
+- **📋 对话管理** — 单条删除/重生成/复制/改问，重生成仅覆盖对应消息；首次标题与「重新生成标题」均由 LLM 按当前生效模型生成（侧栏一键重新生成）；支持按标题检索历史对话、Ctrl+F 对话内搜索跳转
 - **🔎 Agent 调试面板** — 管理员按消息跟进查看逐步推理（支持消息切换/跟最新）；步骤卡片（LLM 决策 / 工具执行）携带真实调用参数与结果、可筛选与详情弹窗；LLM 调用按工具调用去重统计，流式实时高亮；面板占位展开不遮挡对话、带平滑过渡动画与关闭按钮，可拖拽调宽；AI 回复在所有角色下统一显示紧凑状态条，点击"查看"自动打开并定位调试面板
 - **🧠 空状态引导** — 基于知识库文档生成可点击的建议问题（`GET /api/chat/suggestions`，无额外 LLM 调用）
 - **👤 统一个人资料编辑** — 点击头像进入单页编辑，支持上传/在线链接/移除头像，不暴露内部存储路径
@@ -235,6 +235,7 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `DELETE` | `/api/chat/conversations/{id}/messages/{mid}` | JWT | — | 删除单条消息 |
 | `POST` | `/api/chat/conversations/{id}/messages/bulk-delete` | JWT | — | 批量删除消息 |
 | `PUT` | `/api/chat/conversations/{id}/title` | JWT | — | 更新对话标题 |
+| `POST` | `/api/chat/conversations/{id}/regenerate-title` | JWT | — | LLM 重新生成对话标题 |
 | `POST` | `/api/documents/upload` | JWT | admin | 上传单文件 |
 | `POST` | `/api/documents/upload-bulk` | JWT | admin | 批量上传 |
 | `GET` | `/api/documents/list` | JWT | admin | 文档列表 |
