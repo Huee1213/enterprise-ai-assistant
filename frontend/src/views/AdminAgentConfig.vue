@@ -225,6 +225,65 @@ function isModified(key: string): boolean {
   return config.value[key] !== defaults.value[key]
 }
 
+// ── Discard unsaved changes (undo back to last saved state) ─────────────────
+function applyRefsFromConfig() {
+  llmProvider.value = config.value.llm_provider || 'openai'
+  llmApiKey.value = config.value.llm_api_key || ''
+  llmApiBase.value = config.value.llm_api_base || ''
+  modelSearch.value = config.value.llm_model || ''
+  if (llmApiKey.value.includes('••••')) keyEditing.value = false
+  else keyEditing.value = !llmApiKey.value
+  keyVisible.value = false
+  prevApiKey.value = llmApiKey.value
+  originalKey.value = llmApiKey.value
+  modelDropdownOpen.value = false
+
+  embProvider.value = config.value.embedding_provider || 'local'
+  if (embProvider.value === 'same-as-llm') {
+    embApiBase.value = llmApiBase.value
+    embApiKey.value = llmApiKey.value
+  } else {
+    embApiKey.value = config.value.embedding_api_key || ''
+    embApiBase.value = config.value.embedding_api_base || ''
+  }
+  embModelSearch.value = String(config.value.embedding_model || '').replace(/^local\//, '')
+  if (embApiKey.value.includes('••••')) embKeyEditing.value = false
+  else embKeyEditing.value = !embApiKey.value
+  embKeyVisible.value = false
+  embOriginalKey.value = embApiKey.value
+  embModelOpen.value = false
+}
+
+// Whether a section has unsaved edits (incl. an in-progress new API key).
+function sectionCanDiscard(section: SectionKey): boolean {
+  if (sectionDiffCount(section) > 0) return true
+  if (section === 'llm') return llmHasKeyEdit.value
+  if (section === 'embed') return embHasKeyEdit.value
+  return false
+}
+
+const anyUnsaved = computed(() =>
+  (['llm', 'embed', 'retrieval', 'agent'] as SectionKey[]).some(s => sectionCanDiscard(s))
+)
+
+// Undo one section back to its last saved (defaults) values, client-side only.
+function discardSection(section: SectionKey) {
+  for (const k of SECTION_KEYS[section]) {
+    if (k in defaults.value && defaults.value[k] !== undefined) {
+      config.value[k] = defaults.value[k]
+    }
+  }
+  applyRefsFromConfig()
+  toastMsg(`${SECTION_LABEL[section]}未保存修改已撤销`, 'success')
+}
+
+// Undo ALL unsaved edits back to the last saved state, client-side only.
+function discardAll() {
+  config.value = { ...defaults.value }
+  applyRefsFromConfig()
+  toastMsg('未保存修改已全部撤销', 'success')
+}
+
 function toastMsg(msg: string, type: 'success' | 'error') {
   toast.value = { msg, type }
   setTimeout(() => { toast.value = null }, 3000)
@@ -785,6 +844,12 @@ onMounted(loadConfig)
         </p>
       </div>
       <div class="flex items-center gap-2">
+        <button @click="discardAll" :disabled="!anyUnsaved"
+          class="rounded-lg px-3 py-2 text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+          title="撤销所有未保存的修改，恢复为上次保存的配置">
+          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline -mt-0.5 mr-1"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+          撤销修改
+        </button>
         <button @click="resetConfig" :disabled="resetting || !canReset"
           class="rounded-lg px-3 py-2 text-xs font-medium border border-border text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
           title="清空所有配置覆盖，恢复为环境变量默认值">
@@ -978,11 +1043,19 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
             <span v-if="sectionDiffCount('llm') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('llm') }} 项</span>
             <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
-            <button @click="saveSection('llm')" :disabled="saving || !sectionCanSave('llm')"
+            <div class="flex items-center gap-2">
+              <button @click="discardSection('llm')" :disabled="saving || !sectionCanDiscard('llm')"
+                class="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                title="撤销本分区未保存的修改" :style="{ visibility: sectionCanDiscard('llm') ? 'visible' : 'hidden' }">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                撤销
+              </button>
+              <button @click="saveSection('llm')" :disabled="saving || !sectionCanSave('llm')"
               class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
               <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              {{ saving ? '保存中...' : '保存本区' }}
+              {{ saving ? '保存中...' : '保存修改' }}
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1130,11 +1203,19 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
             <span v-if="sectionDiffCount('embed') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('embed') }} 项</span>
             <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
-            <button @click="saveSection('embed')" :disabled="saving || embeddingBusy || !sectionCanSave('embed')"
+            <div class="flex items-center gap-2">
+              <button @click="discardSection('embed')" :disabled="saving || embeddingBusy || !sectionCanDiscard('embed')"
+                class="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                title="撤销本分区未保存的修改" :style="{ visibility: sectionCanDiscard('embed') ? 'visible' : 'hidden' }">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                撤销
+              </button>
+              <button @click="saveSection('embed')" :disabled="saving || embeddingBusy || !sectionCanSave('embed')"
               class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
               <svg v-if="saving || embeddingBusy" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              {{ saving || embeddingBusy ? '处理中...' : '保存本区' }}
+              {{ saving || embeddingBusy ? '处理中...' : '保存修改' }}
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1188,11 +1269,19 @@ onMounted(loadConfig)
           <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
             <span v-if="sectionDiffCount('retrieval') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('retrieval') }} 项</span>
             <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
-            <button @click="saveSection('retrieval')" :disabled="saving || !sectionCanSave('retrieval')"
+            <div class="flex items-center gap-2">
+              <button @click="discardSection('retrieval')" :disabled="saving || !sectionCanDiscard('retrieval')"
+                class="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                title="撤销本分区未保存的修改" :style="{ visibility: sectionCanDiscard('retrieval') ? 'visible' : 'hidden' }">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                撤销
+              </button>
+              <button @click="saveSection('retrieval')" :disabled="saving || !sectionCanSave('retrieval')"
               class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
               <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-              {{ saving ? '保存中...' : '保存本区' }}
+              {{ saving ? '保存中...' : '保存修改' }}
             </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1244,13 +1333,21 @@ onMounted(loadConfig)
             <div class="flex items-center justify-between gap-2 pt-3 border-t border-border/50">
               <span v-if="sectionDiffCount('agent') > 0" class="text-[10px] text-amber-600 dark:text-amber-400">已修改 {{ sectionDiffCount('agent') }} 项</span>
               <span v-else class="text-[10px] text-muted-foreground/50">无修改</span>
+            <div class="flex items-center gap-2">
+              <button @click="discardSection('agent')" :disabled="saving || !sectionCanDiscard('agent')"
+                class="inline-flex items-center gap-1 rounded-lg border border-border px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground hover:bg-muted transition-colors disabled:opacity-40"
+                title="撤销本分区未保存的修改" :style="{ visibility: sectionCanDiscard('agent') ? 'visible' : 'hidden' }">
+                <svg xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="shrink-0"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg>
+                撤销
+              </button>
               <button @click="saveSection('agent')" :disabled="saving || !sectionCanSave('agent')"
                 class="inline-flex items-center gap-1.5 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50">
                 <svg v-if="saving" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                {{ saving ? '保存中...' : '保存本区' }}
+                {{ saving ? '保存中...' : '保存修改' }}
               </button>
             </div>
         </div>
+      </div>
       </div>
           </div>
         </Transition>
