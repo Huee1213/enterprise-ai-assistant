@@ -4,35 +4,49 @@ import { ref, onMounted, onUnmounted } from 'vue'
 const props = withDefaults(defineProps<{ text: string; label?: string }>(), { label: '' })
 const show = ref(false)
 const pos = ref({ x: 0, y: 0 })
+const triggerEl = ref<HTMLElement | null>(null)
 let hideTimer: ReturnType<typeof setTimeout> | null = null
 
-function onEnter(e: MouseEvent) {
+// Anchor the tooltip to the label element (below it) instead of following the
+// cursor. Stable positioning removes the jitter/jump users saw when moving
+// quickly across several descriptions.
+function updatePos() {
+  const el = triggerEl.value
+  if (!el) return
+  const r = el.getBoundingClientRect()
+  const vw = window.innerWidth || document.documentElement.clientWidth
+  const w = 280
+  let left = r.left
+  if (left + w > vw - 8) left = vw - w - 8
+  if (left < 8) left = 8
+  pos.value = { x: left, y: r.bottom + 6 }
+}
+
+function onEnter() {
   if (hideTimer) clearTimeout(hideTimer)
   show.value = true
-  pos.value = { x: e.clientX, y: e.clientY }
+  updatePos()
 }
-function onLeave() {
-  hideTimer = setTimeout(() => { show.value = false }, 150)
-}
-function onMove(e: MouseEvent) {
-  if (show.value && (Math.abs(e.clientX - pos.value.x) > 4 || Math.abs(e.clientY - pos.value.y) > 4)) {
-    pos.value = { x: e.clientX, y: e.clientY }
-  }
-}
-function onClick(e: MouseEvent) {
-  e.preventDefault()
-  e.stopPropagation()
-  // Clicking the label/icon opens the description (mouse-leave/outside click closes).
+
+// Hover/click on the label text both reveal the description.
+function onClick() {
+  if (hideTimer) clearTimeout(hideTimer)
   show.value = true
-  pos.value = { x: e.clientX, y: e.clientY }
+  updatePos()
 }
+
+function onLeave() {
+  // A short grace lets the mouse cross tiny gaps between adjacent labels
+  // without the tooltip flickering, while staying snappy between rows.
+  hideTimer = setTimeout(() => { show.value = false }, 60)
+}
+
 onMounted(() => document.addEventListener('click', onGlobalClick))
 onUnmounted(() => {
   document.removeEventListener('click', onGlobalClick)
   if (hideTimer) clearTimeout(hideTimer)
 })
 function onGlobalClick(e: Event) {
-  // Ignore clicks that land on this trigger (handled by @click).
   const el = e.target as HTMLElement | null
   if (el && el.closest?.('.cfg-tip-trigger')) return
   show.value = false
@@ -41,20 +55,32 @@ function onGlobalClick(e: Event) {
 
 <template>
   <span
-    class="cfg-tip-trigger inline-flex items-center gap-1 cursor-help select-none shrink-0 text-sm font-medium"
-    @mouseenter="onEnter" @mouseleave="onLeave" @mousemove="onMove" @click="onClick"
-  >
-    <template v-if="label">{{ label }}</template>
-    <svg class="text-muted-foreground/60 hover:text-muted-foreground transition-colors" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-      <circle cx="12" cy="12" r="10" /><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/>
-    </svg>
-  </span>
+    ref="triggerEl"
+    class="cfg-tip-trigger inline-flex select-none cursor-help text-sm font-medium border-b border-dotted border-transparent hover:border-muted-foreground/25 transition-colors shrink-0"
+    @mouseenter="onEnter" @mouseleave="onLeave" @click="onClick"
+  >{{ label }}</span>
 
   <Teleport to="body">
-    <div
-      v-if="show"
-      class="fixed z-[10000] max-w-[280px] rounded-lg border border-border bg-popover text-popover-foreground px-3 py-2 text-xs leading-relaxed shadow-lg pointer-events-none"
-      :style="{ left: pos.x + 8 + 'px', top: pos.y + 8 + 'px' }"
-    >{{ text }}</div>
+    <Transition name="tip">
+      <div
+        v-if="show"
+        class="fixed z-[10000] w-72 max-w-[86vw] rounded-lg border border-border bg-popover text-popover-foreground px-3 py-2 text-xs leading-relaxed shadow-lg pointer-events-none"
+        :style="{ left: pos.x + 'px', top: pos.y + 'px' }"
+      >{{ text }}</div>
+    </Transition>
   </Teleport>
 </template>
+
+<style scoped>
+.tip-enter-active {
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+.tip-leave-active {
+  transition: opacity 0.1s ease, transform 0.1s ease;
+}
+.tip-enter-from,
+.tip-leave-to {
+  opacity: 0;
+  transform: translateY(-4px);
+}
+</style>
