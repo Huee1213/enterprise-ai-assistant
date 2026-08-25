@@ -155,8 +155,9 @@ async function downloadFile() {
       </div>
 
       <Teleport to="body">
+        <Transition name="dialog">
         <div v-if="detailDoc" class="fixed inset-0 z-[9999] flex items-start justify-center bg-black/40 backdrop-blur-sm p-2 md:p-4 pt-8 md:pt-12 overflow-y-auto" @click="closeDetail">
-          <div class="bg-card border border-border rounded-xl w-full max-w-3xl shadow-xl animate-scale-in overflow-hidden" @click.stop>
+          <div class="bg-card border border-border rounded-xl w-full max-w-3xl shadow-xl dialog-pop overflow-hidden" @click.stop>
             <div class="px-5 py-4 border-b border-border flex items-center justify-between">
               <div class="min-w-0">
                 <h2 class="text-sm font-semibold truncate">{{ detailDoc.filename }}</h2>
@@ -239,6 +240,7 @@ async function downloadFile() {
             </div>
           </div>
         </div>
+        </Transition>
       </Teleport>
 
     <ConfirmDialog v-if="alertMsg" title="提示" :message="alertMsg" @confirm="alertMsg = ''" @cancel="alertMsg = ''" />
