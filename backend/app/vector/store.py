@@ -1,4 +1,5 @@
 import logging
+import threading
 from typing import List, Optional, Callable
 from langchain_milvus import Milvus
 from langchain_core.documents import Document
@@ -8,28 +9,132 @@ from app.vector.embeddings import get_embeddings
 logger = logging.getLogger("vector_store")
 
 _vector_store: Optional[Milvus] = None
+_schema_lock = threading.Lock()
+_schema_checked = False
 
 
-def get_vector_store(reuse: bool = True) -> Milvus:
-    """Return the cached vector store, optionally rebuilding it.
-
-    `reuse=False` forces a fresh Milvus wrapper with the current embedding
-    config, so switching embedding model/key on the config page takes effect
-    without a process restart.
-    """
-    global _vector_store
-    if reuse and _vector_store is not None:
-        return _vector_store
-    embeddings = get_embeddings()
-    store = Milvus(
+def _fresh_store(embeddings) -> Milvus:
+    return Milvus(
         embedding_function=embeddings,
         collection_name=settings.milvus_collection,
         connection_args={"uri": settings.milvus_uri},
         auto_id=True,
         drop_old=False,
     )
-    if reuse:
-        _vector_store = store
+
+
+def _collection_vector_dim() -> Optional[int]:
+    """Read the vector-field dimension of the existing collection, or None."""
+    try:
+        from pymilvus import MilvusClient
+        client = MilvusClient(uri=settings.milvus_uri)
+        try:
+            if not client.has_collection(settings.milvus_collection):
+                return None
+            desc = client.describe_collection(settings.milvus_collection)
+            for f in desc.get("fields", []):
+                if f.get("name") == "vector" or f.get("type") in (101, 102):  # FLOAT_VECTOR/BINARY
+                    p = f.get("params") or {}
+                    dim = p.get("dim")
+                    return int(dim) if dim else None
+            return None
+        finally:
+            client.close()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("read collection dim failed: %s", e)
+        return None
+
+
+def _drop_collection() -> None:
+    from pymilvus import MilvusClient
+    client = MilvusClient(uri=settings.milvus_uri)
+    try:
+        if client.has_collection(settings.milvus_collection):
+            client.drop_collection(settings.milvus_collection)
+            logger.info("dropped collection %s", settings.milvus_collection)
+    finally:
+        client.close()
+
+
+def reindex_all_from_registry(store: Milvus) -> int:
+    """Re-index every registered document chunk into `store`.
+
+    Keeps metadata identical to the original uploader
+    (source/doc_id/chunk_index/file_hash/uploaded_at).
+    """
+    from app.documents.registry import list_document_entries
+    import hashlib
+    import datetime as _dt
+    entries = list_document_entries() or []
+    total = done = 0
+    for e in entries:
+        chunks = e.get("chunks") or []
+        if not chunks:
+            continue
+        total += len(chunks)
+        joined = " ".join((c.get("content") or "") for c in chunks)
+        file_hash = hashlib.md5(joined.encode("utf-8")).hexdigest()
+        uploaded_at = e.get("uploaded_at") or _dt.datetime.now().isoformat()
+        docs = [
+            Document(
+                page_content=(c.get("content") or ""),
+                metadata={
+                    "source": (e.get("filename") or ""),
+                    "doc_id": (e.get("id") or ""),
+                    "chunk_index": int(c.get("index", 0) or 0),
+                    "file_hash": file_hash,
+                    "uploaded_at": uploaded_at,
+                },
+            )
+            for c in chunks
+        ]
+        store.add_documents(docs)
+        done += len(docs)
+    logger.info("reindexed %s/%s chunks", done, total)
+    return done
+
+
+def get_vector_store(reuse: bool = True) -> Milvus:
+    """Return the cached vector store, optionally rebuilding it.
+
+    `reuse=False` forces a fresh Milvus wrapper with the current embedding
+    config. When the embedding model changes (dimension mismatch with the
+    existing collection), the store is automatically dropped and all documents
+    are re-indexed so knowledge retrieval keeps working without a manual step.
+    """
+    global _vector_store, _schema_checked
+    if reuse and _vector_store is not None:
+        return _vector_store
+
+    # Validate/align the schema once per process (fresh wrapper path).
+    with _schema_lock:
+        embeddings = get_embeddings()
+        store = _fresh_store(embeddings)
+        if reuse:
+            try:
+                if not _schema_checked:
+                    try:
+                        probe_dim = len(embeddings.embed_query("__dim_probe__"))
+                    except Exception as e:  # noqa: BLE001
+                        probe_dim = 0
+                        logger.warning("embed probe failed: %s", e)
+                    coll_dim = _collection_vector_dim()
+                    if coll_dim and probe_dim and coll_dim != probe_dim:
+                        logger.warning(
+                            "embedding dimension mismatch (query=%s, collection=%s) — re-indexing",
+                            probe_dim, coll_dim,
+                        )
+                        _drop_collection()
+                        fresh = _fresh_store(embeddings)
+                        try:
+                            reindex_all_from_registry(fresh)
+                        except Exception as e:  # noqa: BLE001
+                            logger.error("auto re-index failed: %s", e)
+                        store = _fresh_store(embeddings)
+                    _schema_checked = True
+            except Exception as e:  # noqa: BLE001
+                logger.error("schema alignment failed: %s", e)
+            _vector_store = store
     return store
 
 
