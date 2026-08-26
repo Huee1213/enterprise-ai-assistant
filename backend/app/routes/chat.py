@@ -232,16 +232,18 @@ async def generate_title(request: TitleRequest, current_user: dict = Depends(get
             prompt = (
                 f"为对话『{request.message[:120]}』生成一个3-6个字的中文标题，只输出标题本身。"
             )
-            resp = await llm.ainvoke([HumanMessage(content=prompt)])
-            content = resp.content
-            if isinstance(content, list):
-                parts = []
-                for b in content:
-                    parts.append(str(b.get("text", "") or b.get("content", "") or "") if isinstance(b, dict) else str(b))
-                content = "".join(parts)
-            t = str(content or "").strip().strip('"').strip("'").split('\n')[0].strip()[:20]
-            if 1 < len(t) <= 20 and len(t) < len(request.message) and "标题" not in t and "生成" not in t:
-                title = t
+            for _attempt in range(3):
+                resp = await llm.ainvoke([HumanMessage(content=prompt)])
+                content = resp.content
+                if isinstance(content, list):
+                    parts = []
+                    for b in content:
+                        parts.append(str(b.get("text", "") or b.get("content", "") or "") if isinstance(b, dict) else str(b))
+                    content = "".join(parts)
+                t = str(content or "").strip().strip('"').strip("'").split('\n')[0].strip()[:20]
+                if 1 < len(t) <= 20 and len(t) < len(request.message) and "标题" not in t and "生成" not in t:
+                    title = t
+                    break
     except Exception:
         pass
     return TitleResponse(title=title)
@@ -466,35 +468,41 @@ async def regenerate_title(
         from app.agent.runtime_config import get_effective_config as _get_eff
         _cfg = await _get_eff()
         _cfg = _cfg or {}
+        # Generous token budget: reasoning-first models (e.g. deepseek via
+        # OpenRouter) can burn the budget on reasoning and return EMPTY content
+        # when max_tokens is small. Keep it ample and retry on empty output.
         llm = ChatOpenAI(
             model=_cfg.get("llm_model") or settings.llm_model,
-            temperature=0.7,
-            max_tokens=64,
+            temperature=0.3,
+            max_tokens=1024,
             api_key=_cfg.get("llm_api_key") or settings.llm_api_key,
             base_url=_cfg.get("llm_api_base") or settings.llm_api_base,
         )
-        # Concise, direct instruction — this model is unreliable with long
-        # system-prefixed title prompts and may return empty content.
-        text_for_llm = summary[:100] if summary else ""
+        text_for_llm = summary[:120] if summary else ""
         if not text_for_llm and history:
             msgs = [f"{'用户' if h['role'] == 'user' else 'AI'}: {h['content'][:60]}" for h in history[:4]]
             text_for_llm = "\n".join(msgs)
         text_for_llm = text_for_llm.replace("\n", "；")
-        if text_for_llm:
-            resp = await llm.ainvoke([
-                HumanMessage(content=f"为对话『{text_for_llm[:120]}』生成一个3-6个字的中文标题，只输出标题本身。"),
-            ])
-            content = resp.content
-            if isinstance(content, list):
+
+        def _pick(c) -> str:
+            if isinstance(c, list):
                 parts = []
-                for b in content:
+                for b in c:
                     parts.append(str(b.get("text", "") or b.get("content", "") or "") if isinstance(b, dict) else str(b))
-                content = "".join(parts)
-            t = str(content or "").strip().strip('"').strip("'").split('\n')[0].strip()[:15]
-            if t and len(t) <= 12 and len(t) >= 2 and "标题" not in t and "生成" not in t and t != "(无内容)":
-                new_title = t
-    except Exception:
-        pass
+                c = "".join(parts)
+            return str(c or "").strip().strip('"').strip("'").split('\n')[0].strip()[:15]
+
+        if text_for_llm:
+            prompt = f"为对话『{text_for_llm[:120]}』生成一个3-6个字的中文标题，只输出标题本身。"
+            for _attempt in range(3):
+                resp = await llm.ainvoke([HumanMessage(content=prompt)])
+                t = _pick(resp.content)
+                if t and len(t) <= 12 and len(t) >= 2 and "标题" not in t and "生成" not in t:
+                    new_title = t
+                    break
+    except Exception as e:  # noqa: BLE001
+        import traceback, sys as _sys
+        traceback.print_exc(file=_sys.stderr)
 
     # Fallback to summary / first message
     if not new_title:
