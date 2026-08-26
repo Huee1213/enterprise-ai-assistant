@@ -486,15 +486,28 @@ async def init_admin():
             admin = UserModel(
                 id=str(uuid.uuid4()),
                 username="admin",
-                password_hash=_hash_password("admin123"),
+                password_hash=_hash_password("Admin@123"),
                 role="super_admin",
                 display_name="系统管理员",
-                employee_id=_generate_employee_id(),
+                employee_id="ADM-000001",
                 created_at=datetime.now(timezone.utc),
             )
             db.add(admin)
             await db.commit()
-        elif admin.role != "super_admin":
+            return
+        changed = False
+        if admin.role != "super_admin":
             admin.role = "super_admin"
             admin.permissions = ""
+            changed = True
+        if not admin.display_name:
+            admin.display_name = "系统管理员"
+            changed = True
+        # Normalize the built-in admin's employee id to the fixed initial value
+        # (ADM-000001) when it is missing or still an auto-generated placeholder.
+        cur_eid = admin.employee_id or ""
+        if not cur_eid or cur_eid.startswith("EMP-"):
+            admin.employee_id = "ADM-000001"
+            changed = True
+        if changed:
             await db.commit()
