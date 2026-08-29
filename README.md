@@ -10,8 +10,8 @@
 - **🔑 细粒度权限系统** — 文档/用户/权限/Agent 等维度权限控制，权限修改即时生效，无需重新登录
 - **🔐 Redis 令牌管理** — 多设备登录冲突检测，支持强制登录（409 弹窗 + 401 跨设备踢出）
 - **🔧 智能体配置管理** — 分区 Tab 可视化配置（LLM 模型 / 向量嵌入 / 检索参数 / Agent 行为），各分区独立「保存修改」、独立恢复默认、撤销未保存修改（分区单撤 + 全局一键撤销，纯本地回滚）；也可一键恢复全局默认；每项配置带功能描述（悬停或点击配置文字即显示，锚定定位无跳动）；保存后立即生效（无需重启），工具开关/检索阈值/系统提示词/最大轮次均在运行时强制
-- **🧬 本地嵌入模型管理** — 本地模型支持从 fastembed 支持列表一键选择（含维度/体积/已缓存标识，`GET /api/agent/config/embedding/models`）；可配置下载提供商（默认 https://hf-mirror.com）；保存时自动下载并显示实时进度，失败自动回退官方 Hub 或保留原配置；成功后自动重建 Milvus 向量库并重索引全部文档，Agent 无需重启即可检索（`POST .../embedding/prepare`、`POST .../embedding/apply`）；嵌入维度与向量库不匹配时检索前自动重建自愈
-- **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV 多文件批量上传（单文件最大 100MB）、向量检索问答、多选删除、原文预览
+- **🧬 本地嵌入模型管理** — 本地模型支持从 fastembed 支持列表一键选择（含维度/体积/已缓存标识，`GET /api/agent/config/embedding/models`）；可配置下载提供商（默认 https://hf-mirror.com，自动禁用 Xet 传输）；保存时自动下载并显示实时进度（字节级双钩子统计 + SSE 非阻塞推送），失败自动回退官方 Hub 或保留原配置；已下载模型可一键删除（`POST .../embedding/delete`）；嵌入未就绪时配置页与文档管理页均显示提示、上传自动禁用，Agent 知识检索快速失败并给出可读指引；成功后自动重建 Milvus 向量库并重索引全部文档，Agent 无需重启即可检索（`POST .../embedding/prepare`、`POST .../embedding/apply`）；嵌入维度与向量库不匹配时检索前自动重建自愈
+- **📄 文档上传与 RAG 管道** — 支持 PDF/DOCX/TXT/MD/CSV 多文件批量上传（单文件最大 100MB）、向量检索问答、多选删除、原文预览；嵌入模型未就绪时上传自动禁用并提示
 - **🤖 LangGraph Agent 工作流** — 基于 LangChain 1.0 `create_agent()` 状态机编排，多工具推理（知识检索、网页搜索、时间查询、摘要生成）
 - **🔍 本地搜索引擎 (SearXNG)** — 自托管元搜索引擎，聚合 Google/Bing/Brave/Startpage 等，无需 API Key
 - **🧠 长短期记忆系统** — PostgreSQL 持久化偏好/对话历史/自动摘要；LLM 事实提取去重、单人上限 200 条；摘要按对话隔离
@@ -250,6 +250,11 @@ curl -X POST http://localhost:8000/api/chat/simple \
 | `PUT` | `/api/agent/config` | JWT | `agent.config` | 保存配置覆盖项 |
 | `POST` | `/api/agent/config/reset` | JWT | `agent.config` | 恢复默认配置 |
 | `POST` | `/api/agent/config/fetch-models` | JWT | `agent.config` | 获取供应商模型列表 |
+| `GET` | `/api/agent/config/embedding/status` | JWT | `agent.config` | 嵌入就绪状态（本地模型未下载/不支持/无 Key 检测） |
+| `GET` | `/api/agent/config/embedding/models` | JWT | `agent.config` | 本地嵌入模型支持列表（维度/体积/已缓存） |
+| `POST` | `/api/agent/config/embedding/prepare` | JWT | `agent.config` | 下载本地嵌入模型（SSE 实时进度） |
+| `POST` | `/api/agent/config/embedding/apply` | JWT | `agent.config` | 重建向量库并重索引全部文档（SSE 进度） |
+| `POST` | `/api/agent/config/embedding/delete` | JWT | `agent.config` | 删除本地已下载的嵌入模型 |
 | `GET` | `/health` | — | — | 健康检查 |
 
 ---

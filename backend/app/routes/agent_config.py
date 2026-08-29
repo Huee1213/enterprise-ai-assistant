@@ -343,6 +343,56 @@ async def fetch_models(
 
 # ── Embedding local model: prepare (download with progress) + apply (rebuild) ──
 
+@router.get("/config/embedding/status")
+async def embedding_status(
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Readiness of the *effective* embedding for knowledge retrieval.
+
+    Returns {provider, model, ready, reason} where reason explains why the
+    configured embedding cannot serve retrieval right now:
+      - model_not_downloaded: local model selected but not in the local cache
+      - unsupported_model:    local model name is not in fastembed's list
+      - empty_model:          local mode selected but no model name configured
+      - no_api_key:           remote embedding without any usable API key
+    """
+    from app.vector.model_downloader import resolve_local_model, is_local_model_ready
+
+    try:
+        from app.agent.runtime_config import get_effective_config
+        cfg = await get_effective_config()
+    except Exception:
+        cfg = {}
+    cfg = cfg or {}
+    provider = cfg.get("embedding_provider") or "local"
+    model = (cfg.get("embedding_model") or "").strip()
+    out = {"provider": provider, "model": model, "ready": True, "reason": "", "local_supported": None}
+
+    if provider == "local":
+        if not model:
+            out.update({"ready": False, "reason": "empty_model", "local_supported": False})
+            return out
+        try:
+            spec = resolve_local_model(model)
+            out["local_supported"] = True
+            out["hf_repo"] = spec["hf_repo"]
+        except ValueError:
+            out.update({"ready": False, "reason": "unsupported_model", "local_supported": False})
+            return out
+        if not is_local_model_ready(model):
+            out.update({"ready": False, "reason": "model_not_downloaded"})
+            return out
+        return out
+
+    # Remote embeddings need a usable API key (embedding key -> LLM key fallback).
+    has_key = bool(cfg.get("embedding_api_key") or settings.embedding_api_key
+                   or cfg.get("llm_api_key") or settings.llm_api_key)
+    if not has_key:
+        out.update({"ready": False, "reason": "no_api_key"})
+    return out
+
+
 @router.get("/config/embedding/models")
 async def embedding_models(current_user: dict = Depends(get_current_user)):
     """List local (fastembed) supported embedding models with dim/size/cached."""
@@ -384,6 +434,26 @@ def _require_agent_perm(current_user: dict):
         perms = current_user.get("permissions") or []
         if "agent.config" not in perms:
             raise HTTPException(status_code=403, detail="无权限")
+
+
+@router.post("/config/embedding/delete")
+async def embedding_delete(
+    req: EmbeddingPrepareRequest,
+    current_user: dict = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a downloaded local embedding model from the cache.
+
+    Only removes the model's own cache folder; other models and the vector
+    index are untouched (the model can be re-downloaded via prepare later).
+    """
+    _require_agent_perm(current_user)
+    from app.vector.model_downloader import remove_local_model, is_local_model_ready
+    model = (req.model or "").strip()
+    if not model:
+        raise HTTPException(status_code=400, detail="模型名为空")
+    result = remove_local_model(model)
+    return {"status": "ok", "removed": result.get("removed", False), "repo": result.get("repo"), "still_ready": is_local_model_ready(model)}
 
 
 @router.post("/config/embedding/prepare")
@@ -446,10 +516,16 @@ async def embedding_prepare(
 
     async def _gen():
         thread.start()
+        last_sent: float = -1.0
         while thread.is_alive() or not q.empty():
+            # Non-blocking for the event loop: a blocking q.get here would stall
+            # ALL coroutines on this worker for 0.5s per empty iteration, which
+            # delayed SSE delivery (progress appeared only at the very end).
             try:
-                kind, payload = q.get(timeout=0.5)
-            except queue.Empty:
+                kind, payload = await asyncio.wait_for(asyncio.to_thread(q.get), timeout=1.5)
+            except (asyncio.TimeoutError, TimeoutError):
+                if not thread.is_alive() and q.empty():
+                    break
                 continue
             if kind == "error":
                 yield _sses({"status": "error", "detail": payload})
@@ -457,7 +533,13 @@ async def embedding_prepare(
             if kind == "stage":
                 yield _sses({"stage": payload})
             elif kind == "progress":
-                yield _sses({"stage": "downloading", "progress": payload["progress"], "message": payload["message"]})
+                p = payload.get("progress")
+                # Light throttle: emit every meaningful jump ≥0.5% so the UI bar
+                # moves smoothly without flickering at byte granularity.
+                if isinstance(p, (int, float)) and isinstance(last_sent, (int, float)) and p - last_sent < 0.005:
+                    continue
+                last_sent = p
+                yield _sses({"stage": "downloading", "progress": p, "message": payload.get("message", "正在下载本地嵌入模型")})
             elif kind == "ready":
                 yield _sses({"status": "ready", **payload})
                 return

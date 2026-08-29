@@ -1,3 +1,11 @@
+import os
+
+# Silence huggingface_hub tqdm bars (they spam docker logs on every startup
+# when the embedding model cache is verified/downloaded). Must be set before
+# huggingface_hub is imported anywhere.
+os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+os.environ.setdefault("HF_HUB_DISABLE_XET", "1")
+
 from pydantic_settings import BaseSettings
 from typing import Optional
 

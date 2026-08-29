@@ -4,6 +4,8 @@ import { uploadDocument, uploadDocumentsBulk } from '@/api/documents'
 import { useAuthStore } from '@/stores/auth'
 const auth = useAuthStore()
 
+const props = withDefaults(defineProps<{ disabled?: boolean; disabledReason?: string }>(), { disabled: false, disabledReason: '' })
+
 const emit = defineEmits<{
   uploaded: []
 }>()
@@ -17,12 +19,13 @@ const fileInput = ref<HTMLInputElement | null>(null)
 const ACCEPTED_TYPES = '.txt,.md,.pdf,.docx,.csv'
 const MAX_SIZE = 500 * 1024 * 1024
 
-async function onDragOver(e: DragEvent) { e.preventDefault(); isDragging.value = true }
+async function onDragOver(e: DragEvent) { if (!props.disabled) { e.preventDefault(); isDragging.value = true } }
 function onDragLeave() { isDragging.value = false }
 
 async function onDrop(e: DragEvent) {
   e.preventDefault()
   isDragging.value = false
+  if (props.disabled) return
   const files = e.dataTransfer?.files
   if (files?.length) await handleFiles(Array.from(files))
 }
@@ -53,6 +56,10 @@ function validateFiles(files: File[]): File[] {
 }
 
 async function handleFiles(files: File[]) {
+  if (props.disabled) {
+    error.value = props.disabledReason || '当前无法处理文档'
+    return
+  }
   error.value = ''
   const valid = validateFiles(files)
   if (valid.length === 0) return
@@ -88,15 +95,24 @@ async function handleFiles(files: File[]) {
       @dragover="onDragOver"
       @dragleave="onDragLeave"
       @drop="onDrop"
-      class="border-2 border-dashed rounded-xl p-8 text-center transition-colors cursor-pointer"
-      :class="isDragging ? 'border-primary bg-primary/5' : 'border-border hover:border-primary/50 hover:bg-muted/30'"
-      @click="fileInput?.click()"
+      class="border-2 border-dashed rounded-xl p-8 text-center transition-colors"
+      :class="[
+        props.disabled ? 'border-amber-500/40 bg-amber-500/5 cursor-not-allowed opacity-70'
+        : isDragging ? 'border-primary bg-primary/5 cursor-pointer' : 'border-border hover:border-primary/50 hover:bg-muted/30 cursor-pointer',
+      ]"
+      @click="props.disabled ? undefined : fileInput?.click()"
     >
       <input ref="fileInput" type="file" :accept="ACCEPTED_TYPES" multiple class="hidden" @change="onFileSelect" />
 
       <div v-if="isUploading" class="flex flex-col items-center gap-2">
         <div class="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
         <p class="text-sm text-muted-foreground">{{ progress || '正在上传并处理...' }}</p>
+      </div>
+
+      <div v-else-if="props.disabled" class="flex flex-col items-center gap-2">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" class="text-amber-600 dark:text-amber-400"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        <p class="text-sm font-medium text-amber-700 dark:text-amber-400">嵌入模型未就绪，暂不能上传文档</p>
+        <p class="text-xs text-muted-foreground">{{ props.disabledReason || '请先完成嵌入模型配置' }}</p>
       </div>
 
       <div v-else class="flex flex-col items-center gap-2">

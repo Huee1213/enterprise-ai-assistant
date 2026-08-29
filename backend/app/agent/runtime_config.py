@@ -1,8 +1,21 @@
 import json
 from functools import lru_cache
 from sqlalchemy import select, text
-from app.database import AsyncSessionLocal
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.pool import NullPool
+from app.database import DB_URL
 from app.config import settings
+
+# Dedicated engine for config reads issued from FOREIGN event loops (worker
+# threads such as vector indexing / tool execution create their own loop via
+# `asyncio.new_event_loop()`). asyncpg connections are bound to the loop that
+# created them; if those connections were returned to the shared engine pool,
+# the main loop would later reuse/terminate them and crash with
+# "Task got Future attached to a different loop" /
+# "InternalClientError: unknown protocol state 3" on every startup.
+# NullPool opens a fresh connection per call and closes it — never shared.
+_cfg_engine = create_async_engine(DB_URL, poolclass=NullPool)
+_cfg_sessionmaker = async_sessionmaker(_cfg_engine, expire_on_commit=False)
 
 
 @lru_cache(maxsize=1)
@@ -28,7 +41,7 @@ def _load_overrides_sync() -> dict:
 
 async def _load_overrides_async() -> dict:
     try:
-        async with AsyncSessionLocal() as db:
+        async with _cfg_sessionmaker() as db:
             result = await db.execute(
                 select(text("config_json")).select_from(text("agent_config")).order_by(text("id DESC")).limit(1)
             )
@@ -53,6 +66,7 @@ async def get_effective_config() -> dict:
         "embedding_model": settings.embedding_model,
         "embedding_api_key": settings.embedding_api_key or "",
         "embedding_api_base": settings.embedding_api_base or "",
+        "embedding_download_provider": settings.embedding_download_provider,
         "top_k": settings.top_k,
         "score_threshold": settings.score_threshold,
         "chunk_size": settings.chunk_size,
@@ -66,3 +80,22 @@ async def get_effective_config() -> dict:
     }
     effective.update(overrides)
     return effective
+
+
+def get_effective_config_sync() -> dict:
+    """Sync read of the effective config, safe to call from worker threads.
+
+    Uses the dedicated NullPool engine (see _load_overrides_async) so it never
+    touches the shared async engine's pool from a foreign event loop.
+    """
+    import asyncio as _a
+    try:
+        _a.get_running_loop()
+    except RuntimeError:
+        loop = _a.new_event_loop()
+        try:
+            return loop.run_until_complete(get_effective_config())
+        finally:
+            loop.close()
+    # Called from a running loop — env defaults only (should not happen).
+    return {}

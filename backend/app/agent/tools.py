@@ -19,6 +19,20 @@ class KnowledgeSearchTool(BaseTool):
     score_threshold: float = 0.0
 
     def _run(self, query: str) -> str:
+        # Fail fast with a clear, actionable message when the configured local
+        # embedding model is not downloaded — otherwise FastEmbed would block
+        # for minutes attempting its own (likely failing) download.
+        try:
+            from app.agent.runtime_config import get_effective_config_sync
+            from app.vector.model_downloader import is_local_model_ready
+            cfg = get_effective_config_sync()
+            if (cfg.get("embedding_provider") == "local"
+                    and cfg.get("embedding_model")
+                    and not is_local_model_ready(cfg["embedding_model"])):
+                return ("知识库检索暂不可用：本地嵌入模型尚未下载。"
+                        "请管理员在 系统-智能体配置-向量嵌入 中下载该模型或更换嵌入供应商。")
+        except Exception:
+            pass
         docs: List[Document] = similarity_search(
             query,
             k=max(1, int(self.top_k)),

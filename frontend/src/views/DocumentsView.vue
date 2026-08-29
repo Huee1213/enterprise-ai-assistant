@@ -96,6 +96,26 @@ function applyDocs(data: any[]) {
   stats.value.total_chunks = data.reduce((s: number, d: any) => s + (d.chunk_count || 0), 0)
 }
 
+// ── Embedding readiness: local model must be downloaded for retrieval to work ──
+const embedStatus = ref<{ provider: string; model: string; ready: boolean; reason: string } | null>(null)
+const embedNotReady = computed(() => !!embedStatus.value && !embedStatus.value.ready)
+
+const embedNotReadyText = computed(() => {
+  const s = embedStatus.value
+  if (!s) return ''
+  if (s.reason === 'no_api_key') return '远程嵌入未配置 API Key，知识库检索与文档索引暂不可用。请前往 智能体配置 → 向量嵌入 配置。'
+  if (s.reason === 'empty_model') return '未配置嵌入模型，知识库检索与文档索引暂不可用。请前往 智能体配置 → 向量嵌入 选择并下载模型。'
+  if (s.reason === 'unsupported_model') return `嵌入模型 ${s.model} 不受支持，知识库检索暂不可用。请前往 智能体配置 → 向量嵌入 更换模型。`
+  return `本地嵌入模型（${s.model.replace(/^local\//, '')}）尚未下载，知识库检索与文档索引暂不可用。请前往 智能体配置 → 向量嵌入 下载模型或更换供应商。`
+})
+
+async function fetchEmbedStatus() {
+  try {
+    const { data } = await apiClient.get('/agent/config/embedding/status')
+    embedStatus.value = data
+  } catch { /* status is advisory — ignore failures */ }
+}
+
 // DocumentList fetches once on mount and reports the docs it loaded, so the
 // header stats are computed from the same data without a second API call.
 function onDocsLoaded(docs: any[]) {
@@ -126,6 +146,7 @@ async function downloadFile() {
 
 // Stats refresh: on mount via DocumentList's `loaded` event; after uploads/deletes
 // via refreshStats (re-fetch + push to DocumentList without a second mount fetch).
+onMounted(fetchEmbedStatus)
 </script>
 
 <template>
@@ -139,9 +160,20 @@ async function downloadFile() {
         </div>
       </div>
 
+      <!-- Embedding not ready: knowledge retrieval/indexing unavailable -->
+      <div v-if="embedNotReady"
+        class="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 flex flex-col sm:flex-row sm:items-center gap-2 sm:gap-3 animate-fade-in">
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="text-amber-600 dark:text-amber-400 shrink-0"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        <span class="text-xs text-amber-700 dark:text-amber-400 flex-1">{{ embedNotReadyText }}</span>
+        <RouterLink to="/admin/agent"
+          class="shrink-0 inline-flex items-center justify-center rounded-md border border-amber-500/40 px-2.5 py-1 text-[11px] font-medium text-amber-700 dark:text-amber-400 hover:bg-amber-500/10 transition-colors">
+          前往配置
+        </RouterLink>
+      </div>
+
       <div v-if="auth.hasPermission('documents.upload')" class="rounded-xl border border-border bg-card p-4 md:p-6">
         <h2 class="text-sm font-semibold mb-4">上传文档</h2>
-        <DocumentUpload @uploaded="onUploaded" />
+        <DocumentUpload :disabled="embedNotReady" @uploaded="onUploaded" />
       </div>
 
       <div v-if="auth.hasPermission('documents.view')" class="rounded-xl border border-border bg-card p-4 md:p-6">

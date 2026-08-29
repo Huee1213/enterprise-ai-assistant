@@ -67,6 +67,30 @@ const embFetchedModels = ref<ModelItem[]>([])
 const embFetchingModels = ref(false)
 const embLocalModels = ref<ModelItem[]>([])
 const embFetchingLocal = ref(false)
+const deletingModel = ref<string | null>(null)
+
+// Whether the currently selected local model is cached (downloaded) locally.
+// Only meaningful once the supported-model list is loaded.
+const selectedLocalCached = computed(() => {
+  if (embProvider.value !== 'local') return true
+  const m = (config.value.embedding_model || '').trim()
+  if (!m) return false
+  const hit = embLocalModels.value.find(x => x.id === m || `local/${x.name}` === m)
+  if (!hit) return true // unknown/typed model — validated on save instead
+  return !!hit.cached
+})
+
+// True when the selected supported local model is NOT in the local cache —
+// e.g. its cache was just deleted from the dropdown. Saving must still be
+// possible in that case so the user can re-download the same model name
+// (the name itself didn't change, so a plain diff would block the button).
+const selectedLocalNeedsDownload = computed(() => {
+  if (embProvider.value !== 'local') return false
+  const m = (config.value.embedding_model || '').trim()
+  if (!m) return false
+  const hit = embLocalModels.value.find(x => x.id === m || `local/${x.name}` === m)
+  return !!hit && !hit.cached
+})
 const embModelOpen = ref(false)
 const embModelSearch = ref('')
 const embOriginalKey = ref('')
@@ -157,9 +181,20 @@ function sectionDiffCount(section: SectionKey): number {
 function sectionCanSave(section: SectionKey): boolean {
   if (sectionDiffCount(section) > 0) return true
   if (section === 'llm') return llmHasKeyEdit.value
-  if (section === 'embed') return embHasKeyEdit.value
+  if (section === 'embed') {
+    // Allow saving to (re)download the selected local model even when the name
+    // itself didn't change — e.g. right after deleting its local cache.
+    if (selectedLocalNeedsDownload.value) return true
+    return embHasKeyEdit.value
+  }
   return false
 }
+
+// Pre-fetch the local supported-model list when entering the embedding tab so
+// the not-downloaded warning (and dropdown) are ready before the user types.
+watch([activeTab, embProvider], ([tab, prov]) => {
+  if (tab === 'embed' && prov === 'local' && embLocalModels.value.length === 0) fetchLocalModels()
+})
 
 const resettingSection = ref<SectionKey | null>(null)
 
@@ -382,6 +417,29 @@ function selectLocalModel(m: ModelItem) {
   config.value.embedding_model = m.id // "local/BAAI/bge-small-en-v1.5"
   embModelOpen.value = false
   embModelSearch.value = m.name
+}
+
+async function deleteLocalModel(m: ModelItem) {
+  if (deletingModel.value) return
+  deletingModel.value = m.id
+  try {
+    const { data } = await apiClient.post('/agent/config/embedding/delete', { model: m.id })
+    if (data.still_ready) {
+      toastMsg('模型仍可访问，可能被多个缓存副本占用', 'error')
+    } else if (data.removed) {
+      toastMsg(`已删除本地模型 ${m.name}`, 'success')
+    } else {
+      toastMsg('模型未被删除（本地未找到该模型）', 'error')
+    }
+  } catch (err: any) {
+    toastMsg(err.response?.data?.detail || '删除失败', 'error')
+  } finally {
+    deletingModel.value = null
+  }
+  await fetchLocalModels()
+  // Keep the configured model name on purpose: the not-downloaded warning shows
+  // and「保存修改」stays enabled, so the user can re-download the same model
+  // with one click instead of being stuck with a disabled button.
 }
 
 function handleModelInputFocus() {
@@ -668,11 +726,16 @@ async function saveEmbedSectionLocal() {
   const provider = (config.value.embedding_download_provider || '').trim() || 'https://hf-mirror.com'
 
   const diff = buildEmbedDiff()
-  if (Object.keys(diff).length === 0) { toastMsg('该区域没有修改内容', 'success'); return }
+  // The selected local model may need (re)downloading even when the name
+  // didn't change — e.g. right after deleting its cache from the dropdown.
+  const needsDownload = selectedLocalNeedsDownload.value
+  if (Object.keys(diff).length === 0 && !needsDownload) { toastMsg('该区域没有修改内容', 'success'); return }
 
   embeddingBusy.value = true
   embeddingStage.value = 'download'
-  embeddingStageText.value = '正在准备本地模型…'
+  embeddingStageText.value = needsDownload && Object.keys(diff).length === 0
+    ? '所选模型尚未下载，正在重新下载…'
+    : '正在准备本地模型…'
   embeddingProgress.value = 0
   saving.value = true
 
@@ -706,16 +769,19 @@ async function saveEmbedSectionLocal() {
     return
   }
 
-  // 2) Persist the embed config.
-  try {
-    await apiClient.put('/agent/config', { config: diff })
-  } catch (err: any) {
-    embeddingBusy.value = false
-    saving.value = false
-    embeddingStage.value = 'idle'
-    toastMsg(err.response?.data?.detail || err.message || '保存失败', 'error')
-    await reloadConfig()
-    return
+  // 2) Persist the embed config (skip when nothing changed — the model name is
+  //    already persisted; only its cache was missing and prepare re-fetched it).
+  if (Object.keys(diff).length > 0) {
+    try {
+      await apiClient.put('/agent/config', { config: diff })
+    } catch (err: any) {
+      embeddingBusy.value = false
+      saving.value = false
+      embeddingStage.value = 'idle'
+      toastMsg(err.response?.data?.detail || err.message || '保存失败', 'error')
+      await reloadConfig()
+      return
+    }
   }
 
   // 3) Apply: rebuild vector store + reindex with progress.
@@ -753,7 +819,15 @@ async function saveEmbedSectionLocal() {
   }
 
   if (applied) {
-    toastMsg('向量嵌入已保存，知识库索引已重建', 'success')
+    toastMsg(
+      Object.keys(diff).length > 0
+        ? '向量嵌入已保存，知识库索引已重建'
+        : `本地嵌入模型已重新下载，知识库索引已重建`,
+      'success'
+    )
+    // Refresh cached flags so the "尚未下载" warning disappears immediately
+    // (previously it lingered until the user switched pages).
+    await fetchLocalModels()
   } else {
     toastMsg('索引重建未完成', 'error')
   }
@@ -1091,6 +1165,13 @@ onMounted(loadConfig)
             </select>
           </div>
 
+          <!-- Not-downloaded warning: knowledge retrieval is unavailable until the model is fetched -->
+          <div v-if="embProvider === 'local' && !selectedLocalCached"
+            class="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2 animate-fade-in">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="shrink-0 mt-0.5"><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+            <span class="min-w-0 flex-1">所选本地嵌入模型尚未下载，知识库检索与文档索引暂不可用。点击「保存修改」将自动下载该模型（下载提供商见下方），完成后自动重建索引。</span>
+          </div>
+
           <!-- Embedding API Key (only for remote) -->
           <div v-if="embProvider !== 'local'" class="flex items-center justify-between gap-4">
             <div class="flex-1 min-w-0"><ConfigTooltip label="Embedding API Key" :text="FIELD_DESC.embedding_api_key" /></div>
@@ -1138,19 +1219,32 @@ onMounted(loadConfig)
                 <!-- Local mode dropdown: fastembed supported list -->
                 <div v-if="embProvider === 'local' && embModelOpen && filteredLocalModels.length > 0"
                   class="absolute top-full left-0 right-0 mt-1 z-30 max-h-56 overflow-y-auto rounded-md border border-border bg-popover shadow-lg">
-                  <button v-for="m in filteredLocalModels" :key="m.id" @mousedown.prevent="selectLocalModel(m)"
-                    class="w-full text-left px-3 py-2 text-xs text-popover-foreground hover:bg-muted transition-colors border-b border-border/30 last:border-0"
-                    :class="config.embedding_model === m.id ? 'bg-primary/5 font-medium' : ''">
-                    <span class="flex items-center gap-1.5">
-                      <span class="truncate" :title="m.name">{{ m.name }}</span>
-                      <span v-if="m.cached" class="shrink-0 text-[9px] rounded px-1 py-0.5 bg-green-500/15 text-green-600 dark:text-green-400">已就绪</span>
+                  <div v-for="m in filteredLocalModels" :key="m.id"
+                    class="w-full text-left px-3 py-2 text-xs text-popover-foreground hover:bg-muted transition-colors border-b border-border/30 last:border-0 flex items-center justify-between gap-2 cursor-pointer"
+                    :class="config.embedding_model === m.id ? 'bg-primary/5 font-medium' : ''" @mousedown.prevent="selectLocalModel(m)">
+                    <span class="min-w-0 flex-1">
+                      <span class="flex items-center gap-1.5">
+                        <span class="truncate" :title="m.name">{{ m.name }}</span>
+                        <span v-if="m.cached" class="shrink-0 text-[9px] rounded px-1 py-0.5 bg-green-500/15 text-green-600 dark:text-green-400">已就绪</span>
+                      </span>
+                      <span class="flex items-center gap-2 text-[9px] text-muted-foreground/60 mt-0.5 truncate">
+                        <span v-if="m.dim">{{ m.dim }} 维</span>
+                        <span v-if="m.size_gb">{{ m.size_gb }} GB</span>
+                        <span v-if="m.description" class="truncate" :title="m.description">{{ m.description }}</span>
+                      </span>
                     </span>
-                    <span class="flex items-center gap-2 text-[9px] text-muted-foreground/60 mt-0.5 truncate">
-                      <span v-if="m.dim">{{ m.dim }} 维</span>
-                      <span v-if="m.size_gb">{{ m.size_gb }} GB</span>
-                      <span v-if="m.description" class="truncate" :title="m.description">{{ m.description }}</span>
-                    </span>
-                  </button>
+                    <button
+                      v-if="m.cached"
+                      @mousedown.stop.prevent="deleteLocalModel(m)"
+                      :disabled="deletingModel === m.id"
+                      class="shrink-0 inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] text-destructive hover:bg-destructive/10 disabled:opacity-40 transition-colors"
+                      :title="'删除已下载的模型 ' + m.name"
+                    >
+                      <svg v-if="deletingModel === m.id" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                      <svg v-else xmlns="http://www.w3.org/2000/svg" width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
+                      删除
+                    </button>
+                  </div>
                 </div>
                 <div v-if="embProvider === 'local' && embModelOpen && embLocalModels.length === 0 && !embFetchingLocal"
                   class="absolute top-full left-0 right-0 z-30 mt-1 rounded-md border border-border bg-popover shadow-lg px-3 py-2 text-xs text-muted-foreground/50 text-center">暂无可选模型</div>
@@ -1184,18 +1278,21 @@ onMounted(loadConfig)
             </div>
           </div>
 
-          <!-- Local model progress -->
+          <!-- Local model progress: determinate bar when % known, animated when not -->
           <div v-if="embeddingBusy" class="rounded-lg border border-primary/20 bg-primary/5 px-3 py-3 space-y-2 animate-fade-in">
             <div class="flex items-center justify-between text-xs">
               <span class="text-muted-foreground inline-flex items-center gap-2">
                 <svg class="animate-spin text-primary" xmlns="http://www.w3.org/2000/svg" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
                 {{ embeddingStageText || '处理中…' }}
               </span>
-              <span v-if="embeddingProgress !== null" class="text-muted-foreground/70 tabular-nums">{{ Math.round(embeddingProgress * 100) }}%</span>
+              <span v-if="embeddingProgress !== null && embeddingProgress > 0" class="text-muted-foreground/70 tabular-nums">{{ Math.round(embeddingProgress * 100) }}%</span>
             </div>
-            <div class="h-1.5 rounded-full bg-muted-foreground/15 overflow-hidden">
+            <div v-if="embeddingProgress !== null && embeddingProgress > 0" class="h-1.5 rounded-full bg-muted-foreground/15 overflow-hidden">
               <div class="h-full rounded-full bg-primary transition-all duration-300"
-                :style="{ width: (embeddingProgress !== null ? embeddingProgress : 0.05) * 100 + '%' }" />
+                :style="{ width: Math.min(100, embeddingProgress * 100) + '%' }" />
+            </div>
+            <div v-else class="h-1.5 rounded-full bg-muted-foreground/15 overflow-hidden relative">
+              <div class="absolute inset-y-0 w-1/3 rounded-full bg-primary/50 animate-progress-indeterminate" />
             </div>
             <p class="text-[10px] text-muted-foreground/60">本地模型首次使用需下载，完成后将自动重建知识库索引，使 Agent 能正常检索文档。</p>
           </div>
@@ -1371,5 +1468,14 @@ onMounted(loadConfig)
 .sect-slide-leave-to {
   opacity: 0;
   transform: translateX(-10px);
+}
+
+/* Indeterminate (unknown %) progress animation while downloading */
+@keyframes kilo-indeterminate {
+  0% { left: -33%; }
+  100% { left: 100%; }
+}
+.animate-progress-indeterminate {
+  animation: kilo-indeterminate 1.2s ease-in-out infinite;
 }
 </style>
